@@ -1,0 +1,45 @@
+---
+title: "ces21_variable_labels"
+author: "Ran"
+date: "2025-07-08"
+output: html_document
+---
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r setup, include=FALSE}
+library(haven)
+library(tidyverse)
+
+# load data
+data <- read_dta("dataverse_files/2021 Canadian Election Study v2.0.dta")
+```
+
+```{r}
+var_labels <- sapply(data, function(x) {
+  lbl <- attr(x, "label")
+  if (is.null(lbl)) {
+    NA_character_
+  } else if (length(lbl) >= 1) {
+    as.character(lbl[1])  # 只取第一个元素
+  } else {
+    NA_character_
+  }
+})
+
+var_label_df <- data.frame(
+  variable_name = names(data),
+  variable_label = var_labels,
+  stringsAsFactors = FALSE
+)
+```
+
+```{r}
+write.csv(var_label_df, "variable_labels.csv", row.names = FALSE)
+```
+
+
