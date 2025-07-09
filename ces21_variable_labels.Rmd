@@ -5,11 +5,8 @@ date: "2025-07-08"
 output: html_document
 ---
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+## Variable labels
+Imported the CES2021 dataset from dta file, convert coded variables to human-readable labels, and extract variable metadata for documentation.
 
 ```{r setup, include=FALSE}
 library(haven)
@@ -19,18 +16,28 @@ library(tidyverse)
 data <- read_dta("dataverse_files/2021 Canadian Election Study v2.0.dta")
 ```
 
+The original CES 2021 dataset was provided in .dta (Stata) format. Upon loading it into R via the haven package, the variable labels (stored as metadata attributes) exhibited two key issues:
+
+Garbled text or encoding errors — due to incorrect character decoding from .dta format (possibly non-UTF-8 encoding).
+
+Truncated labels — several labels appeared to be cut off mid-sentence, likely due to Stata’s historical 80-character limit for variable labels.
+
 ```{r}
+# get labels
 var_labels <- sapply(data, function(x) {
   lbl <- attr(x, "label")
   if (is.null(lbl)) {
     NA_character_
-  } else if (length(lbl) >= 1) {
-    as.character(lbl[1])  # 只取第一个元素
   } else {
-    NA_character_
+    # Merge multiples into one label
+    lbl_clean <- paste(lbl, collapse = " ")
+    lbl_clean <- gsub("[\r\n\t]", " ", lbl_clean)
+    lbl_clean <- trimws(lbl_clean)
+    if (lbl_clean == "") NA_character_ else lbl_clean
   }
 })
 
+# create mapping table
 var_label_df <- data.frame(
   variable_name = names(data),
   variable_label = var_labels,
@@ -39,7 +46,27 @@ var_label_df <- data.frame(
 ```
 
 ```{r}
-write.csv(var_label_df, "variable_labels.csv", row.names = FALSE)
+# output variable labels
+
+fileConn <- file("variable_labels.csv", open = "wb")
+writeBin(charToRaw("\xEF\xBB\xBF"), fileConn)  # UTF-8 BOM
+close(fileConn)
+
+write.table(
+  var_label_df,
+  file = "variable_labels.csv",
+  sep = ",",
+  row.names = FALSE,
+  col.names = TRUE,
+  append = TRUE,
+  fileEncoding = "UTF-8"
+)
+```
+Check original data file. Confirmed truncated variable labels were caused by source file limitation (Max 80 chars)
+
+```{r}
+label <- attr(data[["cps21_not_vote_for_1"]], "label")
+nchar(label)
 ```
 
 
