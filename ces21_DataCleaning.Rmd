@@ -1,0 +1,48 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r setup, include=FALSE}
+library(haven)
+library(tidyverse)
+
+ces2021 <- read_dta("dataverse_files/2021 Canadian Election Study v2.0.dta")
+```
+
+```{r}
+ces2021_converted <- ces2021 %>% mutate(across(where(is.labelled), as_factor))
+head(ces2021_converted)
+```
+```{r}
+mia_vars <- c("pes21_votechoice2021", "pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
+              "pes21_inequal", "pes21_abort2", "pes21_contact1", "Region", "cps21_marital",
+              "cps21_imm_year", "cps21_bornin_canada", "cps21_rel_imp", "cps21_volunteer")
+
+ces_1 <- ces2021 %>% select(all_of(mia_vars))
+head(ces_1)
+
+
+```
+
+```{r}
+#missing_vars <- setdiff(mia_vars, names(ces2021))
+#print(missing_vars)
+
+# select numeric variable
+ces_1$vote_numeric <- as.numeric(as.factor(ces_1$pes21_votechoice2021))
+numeric_vars <- ces_1 %>% select(where(is.numeric))
+cor_matrix <- cor(numeric_vars, use = "pairwise.complete.obs")
+
+# Extract the correlation of vote_numeric with other variables
+cor_with_target <- cor_matrix[, "vote_numeric"]
+cor_with_target <- cor_with_target[!names(cor_with_target) %in% "vote_numeric"]
+
+# Sort by value(high to low) and print
+cor_sorted <- sort(abs(cor_with_target), decreasing = TRUE)
+print(cor_sorted)
+```
