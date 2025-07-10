@@ -18,31 +18,206 @@ ces2021 <- read_dta("dataverse_files/2021 Canadian Election Study v2.0.dta")
 ces2021_converted <- ces2021 %>% mutate(across(where(is.labelled), as_factor))
 head(ces2021_converted)
 ```
+
 ```{r}
 mia_vars <- c("pes21_votechoice2021", "pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
               "pes21_inequal", "pes21_abort2", "pes21_contact1", "Region", "cps21_marital",
               "cps21_imm_year", "cps21_bornin_canada", "cps21_rel_imp", "cps21_volunteer")
 
-ces_1 <- ces2021 %>% select(all_of(mia_vars))
-head(ces_1)
-
-
-```
-
-```{r}
 #missing_vars <- setdiff(mia_vars, names(ces2021))
 #print(missing_vars)
 
-# select numeric variable
-ces_1$vote_numeric <- as.numeric(as.factor(ces_1$pes21_votechoice2021))
-numeric_vars <- ces_1 %>% select(where(is.numeric))
-cor_matrix <- cor(numeric_vars, use = "pairwise.complete.obs")
+ces_1 <- ces2021_converted %>% select(all_of(mia_vars), Duration__in_seconds_)
+head(ces_1)
+```
 
-# Extract the correlation of vote_numeric with other variables
-cor_with_target <- cor_matrix[, "vote_numeric"]
-cor_with_target <- cor_with_target[!names(cor_with_target) %in% "vote_numeric"]
+```{r}
+# return unique entry for each feature
+get_feature_levels <- function(data, column_name) {
+  if (!column_name %in% names(data)) {
+    stop("Column not found in dataset.")
+  }
+  unique_values <- unique(data[[column_name]])
+  return(unique_values)
+}
+```
 
-# Sort by value(high to low) and print
-cor_sorted <- sort(abs(cor_with_target), decreasing = TRUE)
-print(cor_sorted)
+```{r}
+#get_feature_levels(ces2021_converted, "pes21_follow_pol")
+
+for (var in mia_vars) {
+  cat("\n---", var, "---\n")
+  print(get_feature_levels(ces2021_converted, var))
+}
+```
+Since these features are of different types and most of them are non-numeric. We cannot apply a single, unified statistical method. 
+Instead, we need to adopt different analysis strategies based on the nature of each variable.
+
+We are beginning with data cleaning as the first step, focusing on handling ambiguous responses such as NA and "don't know". In parallel, we aim to identify patterns of political apathy, which may be reflected through missing values, neutral responses, or lack of engagement.
+
+```{r}
+library(ggplot2)
+ggplot(ces2021, aes(x = Duration__in_seconds_)) +
+  geom_histogram(binwidth = 10) +
+  xlim(0, 2400) +  
+  labs(title = "Distribution of Survey Duration",
+       x = "Duration (seconds)", y = "Count")
+
+summary(ces2021$Duration__in_seconds_)
+```
+The summary statistics of the `Duration` variable are as follows:
+
+- **Minimum**: 362 seconds (~6 minutes)  
+- **1st Quartile (Q1)**: 995 seconds (~16.6 minutes)  
+- **Median**: 1325 seconds (~22 minutes)  
+- **Mean**: 8710 seconds (significantly inflated by outliers)  
+- **3rd Quartile (Q3)**: 1875 seconds (~31.3 minutes)  
+- **Maximum**: 1,575,155 seconds (> 400 hours)
+
+According to the summary, These values suggest that while most respondents completed the survey in under 30 minutes, there are a few extreme outliers with excessively long durations that strongly distort the mean.
+
+The **minimum value of 362 seconds** and the **Q1 value of 995 seconds** suggest that any respondent completing the survey in under 10 minutes may not have engaged meaningfully with the content. Similarly, values above 48 hour are highly suspicious and may indicate participants who were inactive for long periods.
+
+Therefore, a threshold of **600 seconds (10 minutes)** was chosen to identify "too fast" respondents, while an upper cap of **172800 seconds (48 hour)** was applied to identify "too slow" responses.
+
+```{r}
+classify_engagement <- function(data, duration_col = "Duration__in_seconds_", 
+                                fast_threshold = 600, slow_threshold = 172800) {
+  data <- data %>%
+    mutate(
+      engagement_group = case_when(
+        .data[[duration_col]] < fast_threshold ~ "too_fast",
+        .data[[duration_col]] > slow_threshold ~ "too_slow",
+        TRUE ~ "normal"
+      )
+    )
+  
+  low_engagement_data <- data %>% filter(engagement_group != "normal")
+  main_cleaned_data <- data %>% filter(engagement_group == "normal")
+  
+  return(list(
+    full_with_labels = data,
+    low_engagement = low_engagement_data,
+    main_clean = main_cleaned_data
+  ))
+}
+```
+
+```{r}
+result <- classify_engagement(ces_1)
+
+ces_1_engag <- result$full_with_labels
+low_engagement_data <- result$low_engagement # for low engagement analysis
+main_cleaned_data <- result$main_clean # for correlation test
+```
+
+###================================================================
+
+
+```{r}
+# initialize
+list_chi <- c()
+list_kruskal <- c()
+
+target_var <- "pes21_votechoice2021"
+feature_vars <- mia_vars
+
+# figure out variable types
+get_type <- function(x) {
+  if (is.numeric(x)) return("numeric")
+  else if (is.ordered(x)) return("ordered")
+  else if (is.factor(x)) return("categorical")
+  else return("unknown")
+}
+
+# figure out variable types, them to the lists for further s
+for (var in feature_vars) {
+  type_target <- get_type(data[[target_var]])
+  type_var <- get_type(data[[var]])
+  
+  if (type_target == "categorical" && type_var == "categorical") {
+    list_chi <- c(list_chi, var)
+  } else if (
+    type_target == "categorical" && type_var %in% c("numeric", "ordered")
+  ) {
+    list_kruskal <- c(list_kruskal, var)
+  }
+}
+
+```
+```{r}
+check_dontknow <- function(column) {
+  levels <- unique(as.character(column))
+  dk_keywords <- c("Don't know", "Refused", "Not sure", "Prefer not to answer", "No opinion")
+
+  # 检查有没有包含“冷感”关键词
+  matched <- levels[grepl(paste(dk_keywords, collapse="|"), levels, ignore.case=TRUE)]
+  
+  if (length(matched) > 0) {
+    message("⚠️ Column contains possible DK values: ", paste(matched, collapse=", "))
+    # 决定保留还是转换
+  } else {
+    message("✅ Column OK: no DK values detected.")
+  }
+}
+```
+
+
+```{r}
+library(dplyr)
+
+# ---- 输入你的数据和变量 ----
+data <- ces2021_converted  # 替换为你实际的数据框名称
+target_var <- "pes21_votechoice2021"
+other_vars <- c("pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
+                "pes21_inequal", "pes21_abort2", "pes21_contact1", "Region", 
+                "cps21_marital", "cps21_imm_year", "cps21_bornin_canada", 
+                "cps21_rel_imp", "cps21_volunteer")
+
+# ---- 判断变量类型 ----
+get_type <- function(x) {
+  if (is.numeric(x)) return("numeric")
+  else if (is.ordered(x)) return("ordered")
+  else if (is.factor(x)) return("categorical")
+  else return("unknown")
+}
+
+# ---- 推荐方法 ----
+get_method <- function(type1, type2) {
+  if (type1 == "numeric" && type2 == "numeric") return("Pearson / Spearman")
+  if ((type1 == "numeric" && type2 == "ordered") || (type1 == "ordered" && type2 == "numeric")) return("Spearman")
+  if (type1 == "ordered" && type2 == "ordered") return("Spearman")
+  if (type1 == "categorical" && type2 == "categorical") return("Cramér's V / Chi-square")
+  if ((type1 == "categorical" && type2 %in% c("numeric", "ordered")) || 
+      (type2 == "categorical" && type1 %in% c("numeric", "ordered"))) return("Kruskal-Wallis / ANOVA")
+  return("Unknown")
+}
+
+# ---- 构建分析表 ----
+analysis_plan <- data.frame()
+
+for (var in other_vars) {
+  x <- data[[target_var]]
+  y <- data[[var]]
+  type1 <- get_type(x)
+  type2 <- get_type(y)
+  method <- get_method(type1, type2)
+  na1 <- mean(is.na(x)) * 100
+  na2 <- mean(is.na(y)) * 100
+  
+  analysis_plan <- rbind(analysis_plan, data.frame(
+    Variable_A = target_var,
+    Variable_B = var,
+    Type_A = type1,
+    Type_B = type2,
+    Recommended_Test = method,
+    Missing_A_Perc = round(na1, 1),
+    Missing_B_Perc = round(na2, 1)
+  ))
+}
+
+# ---- 查看结果 ----
+print(analysis_plan)
+
+
 ```
