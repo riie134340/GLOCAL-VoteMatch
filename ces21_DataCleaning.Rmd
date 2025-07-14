@@ -3,9 +3,7 @@ title: "R Notebook"
 output: html_notebook
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
-
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+# Imported dataset
 
 ```{r setup, include=FALSE}
 library(haven)
@@ -19,17 +17,28 @@ ces2021_converted <- ces2021 %>% mutate(across(where(is.labelled), as_factor))
 head(ces2021_converted)
 ```
 
+# Feature Selected
+
+Since the original dataset contains over 1000 columns, A subset of variables was selected as candidate features for building a predictive model.
+
 ```{r}
 mia_vars <- c("pes21_votechoice2021", "pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
               "pes21_inequal", "pes21_abort2", "pes21_contact1", "Region", "cps21_marital",
               "cps21_imm_year", "cps21_bornin_canada", "cps21_rel_imp", "cps21_volunteer")
 
-#missing_vars <- setdiff(mia_vars, names(ces2021))
-#print(missing_vars)
+extra_vars <- c("Duration__in_seconds_","pes21_lived")
 
-ces_1 <- ces2021_converted %>% select(all_of(mia_vars), Duration__in_seconds_)
-head(ces_1)
+# Merge selected variables
+feature_vars <- unique(c(mia_vars, extra_vars))
+
+ces_selected <- ces2021_converted %>% select(all_of(feature_vars))
+head(ces_selected)
 ```
+
+Before modeling, we examine the distribution and potential correlations of these features to decide whether they should be included in the model.
+
+Here is the code used to inspect the unique data entries for each selected feature.
+By reviewing these values, we can identify issues like missing data, inconsistent formatting,or unexpected categories — which indicates that data cleaning is needed before analysis.
 
 ```{r}
 # return unique entry for each feature
@@ -45,7 +54,7 @@ get_feature_levels <- function(data, column_name) {
 ```{r}
 #get_feature_levels(ces2021_converted, "pes21_follow_pol")
 
-for (var in mia_vars) {
+for (var in feature_vars) {
   cat("\n---", var, "---\n")
   print(get_feature_levels(ces2021_converted, var))
 }
@@ -53,7 +62,31 @@ for (var in mia_vars) {
 Since these features are of different types and most of them are non-numeric. We cannot apply a single, unified statistical method. 
 Instead, we need to adopt different analysis strategies based on the nature of each variable.
 
+# Pre-step for Correlation test
+
 We are beginning with data cleaning as the first step, focusing on handling ambiguous responses such as NA and "don't know". In parallel, we aim to identify patterns of political apathy, which may be reflected through missing values, neutral responses, or lack of engagement.
+
+
+```{r}
+# Replace all "Don't know / Prefer not to answer" with NA (applies to character or factor columns)
+replace_dontknow_with_na <- function(col) {
+  if (is.character(col) || is.factor(col)) {
+    col <- as.character(col)
+    col[col %in% c("Don't know / Prefer not to answer", "Don’t know / Prefer not to answer")] <- NA
+    return(as.factor(col))
+  } else {
+    return(col)
+  }
+}
+
+# Apply the function to all columns
+ces_cleaned <- ces_selected %>% mutate(across(everything(), replace_dontknow_with_na))
+head(ces_cleaned)
+```
+
+Based on survey duration time, we identified some responses as unreliable.
+These cases are also labeled as politically disengaged.
+Since they may bias the model, we temporarily remove them from the dataset before modeling.
 
 ```{r}
 library(ggplot2)
@@ -104,120 +137,100 @@ classify_engagement <- function(data, duration_col = "Duration__in_seconds_",
 ```
 
 ```{r}
-result <- classify_engagement(ces_1)
+result <- classify_engagement(ces_cleaned)
 
-ces_1_engag <- result$full_with_labels
+ces_selected_engag <- result$full_with_labels
 low_engagement_data <- result$low_engagement # for low engagement analysis
 main_cleaned_data <- result$main_clean # for correlation test
 ```
 
-###================================================================
-
+Next, we divide the selected features into two groups based on their data types:
+- Categorical features will be tested using Cramér's V
+- Ordinal or continuous features will be tested using the Kruskal-Wallis test
+This helps us evaluate the strength of correlation between each feature and the target variable.
 
 ```{r}
-# initialize
+# Initialize lists for variable classification
 list_chi <- c()
 list_kruskal <- c()
 
+# Target variable (e.g. party vote choice)
 target_var <- "pes21_votechoice2021"
-feature_vars <- mia_vars
+target <- main_cleaned_data[[target_var]]
+is_target_cat <- is.factor(target) || is.character(target)
 
-# figure out variable types
-get_type <- function(x) {
-  if (is.numeric(x)) return("numeric")
-  else if (is.ordered(x)) return("ordered")
-  else if (is.factor(x)) return("categorical")
-  else return("unknown")
-}
-
-# figure out variable types, them to the lists for further s
-for (var in feature_vars) {
-  type_target <- get_type(data[[target_var]])
-  type_var <- get_type(data[[var]])
-  
-  if (type_target == "categorical" && type_var == "categorical") {
-    list_chi <- c(list_chi, var)
-  } else if (
-    type_target == "categorical" && type_var %in% c("numeric", "ordered")
-  ) {
-    list_kruskal <- c(list_kruskal, var)
+# Loop through feature variables
+if (is_target_cat) {
+  for (var in feature_vars) {
+    x <- main_cleaned_data[[var]]
+    
+    if (is.factor(x) || is.character(x)) {
+      list_chi <- c(list_chi, var)
+    } else if (is.numeric(x) || is.ordered(x)) {
+      list_kruskal <- c(list_kruskal, var)
+    }
   }
 }
 
-```
-```{r}
-check_dontknow <- function(column) {
-  levels <- unique(as.character(column))
-  dk_keywords <- c("Don't know", "Refused", "Not sure", "Prefer not to answer", "No opinion")
+# Print results
+cat("Variables for Cramér's V (categorical):\n")
+print(list_chi)
 
-  # 检查有没有包含“冷感”关键词
-  matched <- levels[grepl(paste(dk_keywords, collapse="|"), levels, ignore.case=TRUE)]
-  
-  if (length(matched) > 0) {
-    message("⚠️ Column contains possible DK values: ", paste(matched, collapse=", "))
-    # 决定保留还是转换
-  } else {
-    message("✅ Column OK: no DK values detected.")
+cat("\nVariables for Kruskal-Wallis (numeric or ordered):\n")
+print(list_kruskal)
+```
+# Correlation Test
+
+For the features in list_chi, we compute their correlation with the target variable (party vote choice) using Cramér's V. The calculation uses the cramerV() function from the rcompanion package, which automatically removes observations with missing values (NA).
+
+
+```{r}
+library(rcompanion)  # cramerV
+cramer_results <- data.frame(Variable = character(),
+                             CramersV = numeric(),
+                             stringsAsFactors = FALSE)
+
+for (var in list_chi) {
+  tbl <- table(main_cleaned_data[[target_var]], main_cleaned_data[[var]])
+  if (min(dim(tbl)) > 1) {
+    result <- cramerV(tbl, bias.correct = TRUE)
+    cramer_results <- rbind(cramer_results, data.frame(Variable = var, CramersV = result))
   }
 }
+
+# print result
+cramer_results <- cramer_results[order(-cramer_results$CramersV), ]
+print(cramer_results, row.names = FALSE)
+
 ```
 
+Higher Cramér's V values indicate stronger associations with the target variable.
+Variables such as Region and Province showed relatively strong correlations with vote choice, while others like Volunteer activity and Immigration year had weaker or missing correlations.
+
+
+Then we applied the Kruskal–Wallis test to evaluate whether the distributions of features in list_kruskal differ significantly across vote choice categories.
 
 ```{r}
-library(dplyr)
+kruskal_results <- data.frame(Variable = character(),
+                              KruskalP = numeric(),
+                              stringsAsFactors = FALSE)
 
-# ---- 输入你的数据和变量 ----
-data <- ces2021_converted  # 替换为你实际的数据框名称
-target_var <- "pes21_votechoice2021"
-other_vars <- c("pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
-                "pes21_inequal", "pes21_abort2", "pes21_contact1", "Region", 
-                "cps21_marital", "cps21_imm_year", "cps21_bornin_canada", 
-                "cps21_rel_imp", "cps21_volunteer")
-
-# ---- 判断变量类型 ----
-get_type <- function(x) {
-  if (is.numeric(x)) return("numeric")
-  else if (is.ordered(x)) return("ordered")
-  else if (is.factor(x)) return("categorical")
-  else return("unknown")
-}
-
-# ---- 推荐方法 ----
-get_method <- function(type1, type2) {
-  if (type1 == "numeric" && type2 == "numeric") return("Pearson / Spearman")
-  if ((type1 == "numeric" && type2 == "ordered") || (type1 == "ordered" && type2 == "numeric")) return("Spearman")
-  if (type1 == "ordered" && type2 == "ordered") return("Spearman")
-  if (type1 == "categorical" && type2 == "categorical") return("Cramér's V / Chi-square")
-  if ((type1 == "categorical" && type2 %in% c("numeric", "ordered")) || 
-      (type2 == "categorical" && type1 %in% c("numeric", "ordered"))) return("Kruskal-Wallis / ANOVA")
-  return("Unknown")
-}
-
-# ---- 构建分析表 ----
-analysis_plan <- data.frame()
-
-for (var in other_vars) {
-  x <- data[[target_var]]
-  y <- data[[var]]
-  type1 <- get_type(x)
-  type2 <- get_type(y)
-  method <- get_method(type1, type2)
-  na1 <- mean(is.na(x)) * 100
-  na2 <- mean(is.na(y)) * 100
+for (var in list_kruskal) {
+  df <- na.omit(main_cleaned_data[, c(var, target_var)])
+  formula <- as.formula(paste(var, "~", target_var))
+  result <- kruskal.test(formula, data = df)
   
-  analysis_plan <- rbind(analysis_plan, data.frame(
-    Variable_A = target_var,
-    Variable_B = var,
-    Type_A = type1,
-    Type_B = type2,
-    Recommended_Test = method,
-    Missing_A_Perc = round(na1, 1),
-    Missing_B_Perc = round(na2, 1)
-  ))
+  kruskal_results <- rbind(kruskal_results,
+                           data.frame(Variable = var,
+                                      KruskalP = result$p.value))
 }
 
-# ---- 查看结果 ----
-print(analysis_plan)
-
+# print result
+kruskal_results <- kruskal_results[order(kruskal_results$KruskalP), ]
+print(kruskal_results)
 
 ```
+
+Since small p-values indicate strong evidence of differences between groups.
+Both 'cps21_age' and 'Duration__in_seconds_' represented that these features are highly associated with voting behavior and may be valuable for predictive modeling.
+
