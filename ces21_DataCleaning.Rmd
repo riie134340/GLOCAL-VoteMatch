@@ -207,6 +207,18 @@ print(cramer_results, row.names = FALSE)
 Higher Cramér's V values indicate stronger associations with the target variable.
 Variables such as Region and Province showed relatively strong correlations with vote choice, while others like Volunteer activity and Immigration year had weaker or missing correlations.
 
+During the Cramér's V analysis, we found that 'cps21_imm_year' returned NaN. It might because the 'cps21_imm_year' variable has many unique values (immigration years).
+To address this, we converted 'cps21_imm_year' into 'years since immigration' by subtracting it from 2021.
+This transformed variable is numeric and can be meaningfully analyzed using the Kruskal–Wallis test.
+
+```{r}
+# convert new variable
+main_cleaned_data$imm_duration <- 2021 - as.numeric(main_cleaned_data$cps21_imm_year)
+
+# add to list_kruskal
+list_kruskal <- c(list_kruskal, "imm_duration")
+```
+
 
 Then we applied the Kruskal–Wallis test to evaluate whether the distributions of features in list_kruskal differ significantly across vote choice categories.
 
@@ -232,5 +244,4 @@ print(kruskal_results)
 ```
 
 Since small p-values indicate strong evidence of differences between groups.
-Both 'cps21_age' and 'Duration__in_seconds_' represented that these features are highly associated with voting behavior and may be valuable for predictive modeling.
-
+The features 'cps21_age', 'Duration__in_seconds_', and 'imm_duration' all represented that these features are highly associated with voting behavior and may be valuable for predictive modeling.
