@@ -1,9 +1,12 @@
 ---
-title: "R Notebook"
-output: html_notebook
+title: "Correlation test"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
 ---
 
-# Imported dataset
+### Imported dataset
 
 ```{r setup, include=FALSE}
 library(haven)
@@ -17,7 +20,7 @@ ces2021_converted <- ces2021 %>% mutate(across(where(is.labelled), as_factor))
 head(ces2021_converted)
 ```
 
-# Feature Selected
+### Feature Selected
 
 Since the original dataset contains over 1000 columns, A subset of variables was selected as candidate features for building a predictive model.
 
@@ -62,7 +65,7 @@ for (var in feature_vars) {
 Since these features are of different types and most of them are non-numeric. We cannot apply a single, unified statistical method. 
 Instead, we need to adopt different analysis strategies based on the nature of each variable.
 
-# Pre-step for Correlation test
+### Pre-step for Correlation test
 
 We are beginning with data cleaning as the first step, focusing on handling ambiguous responses such as NA and "don't know". In parallel, we aim to identify patterns of political apathy, which may be reflected through missing values, neutral responses, or lack of engagement.
 
@@ -179,7 +182,7 @@ print(list_chi)
 cat("\nVariables for Kruskal-Wallis (numeric or ordered):\n")
 print(list_kruskal)
 ```
-# Correlation Test
+### Correlation Test
 
 For the features in list_chi, we compute their correlation with the target variable (party vote choice) using Cramér's V. The calculation uses the cramerV() function from the rcompanion package, which automatically removes observations with missing values (NA).
 
@@ -245,3 +248,22 @@ print(kruskal_results)
 
 Since small p-values indicate strong evidence of differences between groups.
 The features 'cps21_age', 'Duration__in_seconds_', and 'imm_duration' all represented that these features are highly associated with voting behavior and may be valuable for predictive modeling.
+
+
+### Result
+
+We will use the following features in the prediction model:
+```{r}
+# filter variables with Cramér's V > 0.1
+selected_cramer_vars <- cramer_results %>%
+  filter(CramersV > 0.1) %>%
+  pull(Variable)
+
+# filter variables with kruskal < 0.05
+selected_kruskal_vars <- kruskal_results %>%
+  filter(KruskalP < 0.05) %>%
+  pull(Variable)
+
+selected_model_vars <- unique(c(selected_cramer_vars, selected_kruskal_vars))
+print(selected_model_vars)
+```
