@@ -25,7 +25,8 @@ head(ces2021_converted)
 Since the original dataset contains over 1000 columns, A subset of variables was selected as candidate features for building a predictive model.
 
 ```{r}
-mia_vars <- c("pes21_votechoice2021", "pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
+target_var <- "pes21_votechoice2021"
+mia_vars <- c("pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
               "pes21_inequal", "pes21_abort2", "pes21_contact1", "Region", "cps21_marital",
               "cps21_imm_year", "cps21_bornin_canada", "cps21_rel_imp", "cps21_volunteer")
 
@@ -34,7 +35,7 @@ extra_vars <- c("Duration__in_seconds_","pes21_lived")
 # Merge selected variables
 feature_vars <- unique(c(mia_vars, extra_vars))
 
-ces_selected <- ces2021_converted %>% select(all_of(feature_vars))
+ces_selected <- ces2021_converted %>% select(target_var, all_of(feature_vars))
 head(ces_selected)
 ```
 
@@ -158,7 +159,6 @@ list_chi <- c()
 list_kruskal <- c()
 
 # Target variable (e.g. party vote choice)
-target_var <- "pes21_votechoice2021"
 target <- main_cleaned_data[[target_var]]
 is_target_cat <- is.factor(target) || is.character(target)
 
@@ -249,9 +249,6 @@ print(kruskal_results)
 Since small p-values indicate strong evidence of differences between groups.
 The features 'cps21_age', 'Duration__in_seconds_', and 'imm_duration' all represented that these features are highly associated with voting behavior and may be valuable for predictive modeling.
 
-
-### Result
-
 We will use the following features in the prediction model:
 ```{r}
 # filter variables with Cramér's V > 0.1
@@ -264,6 +261,68 @@ selected_kruskal_vars <- kruskal_results %>%
   filter(KruskalP < 0.05) %>%
   pull(Variable)
 
+selected_model_vars <- unique(c(selected_cramer_vars, selected_kruskal_vars))
+print(selected_model_vars)
+```
+
+### Checking Feature Redundancy
+
+To prevent multicollinearity in the model, we calculated pairwise Cramér’s V scores among features to identify strongly correlated variables.
+
+Interpretation thresholds:
+• V > 0.6 — High correlation: likely redundant; consider removing one of the variables.
+• V > 0.4 — Moderate correlation: possible redundancy; proceed with caution.
+• V < 0.3 — Low correlation: safe to include both variables.
+
+
+```{r}
+library(rcompanion)
+
+feature_corr_results <- data.frame(VarA = character(),
+                                   VarB = character(),
+                                   CramersV = numeric(),
+                                   stringsAsFactors = FALSE)
+
+for (i in 1:(length(selected_cramer_vars)-1)) {
+  for (j in (i+1):length(selected_cramer_vars)) {
+    varA <- selected_cramer_vars[i]
+    varB <- selected_cramer_vars[j]
+
+    clean_data <- main_cleaned_data %>%
+      dplyr::select(all_of(c(varA, varB))) %>%
+      dplyr::filter(!is.na(.data[[varA]]), !is.na(.data[[varB]]))
+
+    tbl <- table(clean_data[[varA]], clean_data[[varB]])
+
+    if (min(dim(tbl)) > 1) {
+      result <- cramerV(tbl, bias.correct = TRUE)
+      feature_corr_results <- rbind(feature_corr_results,
+                                    data.frame(VarA = varA, VarB = varB, CramersV = result))
+    }
+  }
+}
+
+# print out
+feature_corr_results <- feature_corr_results %>%
+  mutate(Explanation = case_when(
+    CramersV > 0.6 ~ "High correlation – consider removing one variable",
+    CramersV > 0.4 ~ "Moderate correlation – possible redundancy",
+    TRUE ~ "Low correlation – likely safe to include both"
+  ))
+
+feature_corr_results <- feature_corr_results[order(-feature_corr_results$CramersV), ]
+print(feature_corr_results)
+```
+
+
+Among all feature pairs, only `Region` and `pes21_province` showed a high Cramér’s V (0.9997), indicating near-perfect redundancy. Since both represent geographic information.
+We will retain only one of them to avoid duplication. In this case, we choose to keep `pes21_province`.
+
+### Result
+
+Update the list of features in the prediction model:
+```{r}
+selected_cramer_vars <- setdiff(selected_cramer_vars, "Region")
 selected_model_vars <- unique(c(selected_cramer_vars, selected_kruskal_vars))
 print(selected_model_vars)
 ```
