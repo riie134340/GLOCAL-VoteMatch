@@ -9,6 +9,8 @@ output:
 ### Imported dataset
 
 ```{r setup, include=FALSE}
+#rm(list = ls())
+
 library(haven)
 library(tidyverse)
 

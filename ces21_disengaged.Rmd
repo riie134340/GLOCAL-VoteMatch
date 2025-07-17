@@ -1,0 +1,139 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+### Imported dataset1
+
+```{r setup, include=FALSE}
+#library(haven)
+#library(tidyverse)
+
+ces2021 <- read_dta("dataverse_files/2021 Canadian Election Study v2.0.dta")
+```
+
+
+### Selecting variables
+
+Before building any predictive model, we begin by selecting a set of variables to explore their relationships with the target variable (`pes21_votechoice2021`), as well as among themselves.
+
+- `feature_vars` contains variables potentially relevant predictors we need to explore.
+
+In addition, two variable sets are included for diagnostic purposes:
+- `check_disengaged`: used to identify politically disengaged respondents.
+- `check_low_quality`: used to flag low-quality or problematic responses (e.g., duplicates, speeders, inattentiveness).
+
+We combine all of these into a single dataframe (`ces_selected`) to conduct correlation testing in the next step.
+
+```{r}
+target_var <- "pes21_votechoice2021"
+mia_vars <- c("pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
+              "pes21_inequal", "pes21_abort2", "pes21_contact1", "Region", "cps21_marital",
+              "cps21_imm_year", "cps21_bornin_canada", "cps21_rel_imp", "cps21_volunteer")
+
+extra_vars <- c("cps21_education","pes21_lived", "cps21_fed_gov_sat")
+
+# Merge selected variables
+feature_vars <- unique(c(mia_vars, extra_vars))
+
+
+# use for check data quality
+check_disengaged <- c("pes21_follow_pol", "cps21_interest_gen_1", "cps21_interest_elxn_1",
+                      "cps21_news_cons","cps21_govt_confusing")
+
+check_low_quality <- c("cps21_duplicates_pid_flag", "cps21_duplicate_ip_demo_flag", 
+                       "pes21_speeder_low_quality","pes21_duplicates_pid_flag",
+                       "cps21_inattentive","pes21_inattentive")
+
+selected_var <- unique(c(mia_vars, extra_vars, check_disengaged, check_low_quality))
+ces_selected <- ces2021 %>% select(target_var, all_of(selected_var))
+head(ces_selected)
+```
+
+### Creating disengagement and data quality flags
+
+To define political disengagement, the following survey items are used:
+
+*pes21_follow_pol* And how closely do you follow politics on TV, radio, newspapers, or the Internet?
+
+- Very closely (1)
+- Fairly closely (2)
+- Not very closely (3)
+- Not at all (4)
+
+*cps21_interest_gen_1* How interested are you in politics generally? Set the slider to a number from 0 to 10, where 0 means no interest at all, and 10 means a great deal of interest.
+
+*cps21_interest_elxn_1* How interested are you in this federal election? Set the slider to a number from 0 to 10, where 0 means no interest at all, and 10 means a great deal of interest.
+
+*cps21_news_cons* On average, how much time do you usually spend watching, reading, and listening to news each day?
+
+- None (1)
+- 1-10 minutes (2)
+- 11-30 minutes (3)
+- 31-60 minutes (4)
+- Between 1 and 2 hours (5)
+- More than 2 hours (6)
+- Don't know/ Prefer not to answer (7)
+
+*cps21_govt_confusing* Sometimes, politics and government seem so complicated that a person like me can't really understand what's going on.
+
+- Strongly disagree (1)
+- Somewhat disagree (2)
+- Somewhat agree (3)
+- Strongly agree (4)
+- Don't know/ Prefer not to answer (5)
+
+These variables are combined into a simple count (`disengaged_count`) to reflect the number of disengagement indicators present for each respondent.
+
+```{r}
+ces_selected$disengaged_count <- with(ces_selected,
+  as.integer(pes21_follow_pol >= 3) +
+  as.integer(cps21_interest_gen_1 <= 2) +
+  as.integer(cps21_interest_elxn_1 <= 2) +
+  as.integer(cps21_news_cons %in% c(1, 7)) +
+  as.integer(cps21_govt_confusing == 5)
+)
+```
+
+According to the original codebook, a number of severe data quality issues (e.g., incomplete responses, failed attention checks, straightlining) were already removed from the public dataset.
+
+However, some respondents were flagged for less-severe issues and retained. These include:
+- Inattentive respondents (e.g., those taking unusually long to complete the survey)
+- Duplicate IP/demo matches
+- Initial duplicates
+- PES speeders (respondents who completed the post-election survey unusually fast)
+
+We use the following variables to track these lower-level quality concerns:
+- `cps21_duplicates_pid_flag`
+- `cps21_duplicate_ip_demo_flag`
+- `cps21_inattentive`
+- `pes21_speeder_low_quality`
+- `pes21_duplicates_pid_flag`
+- `pes21_inattentive`
+
+To simplify later filtering or robustness checks, we create a `low_quality_count` variable to count how many of these flags are triggered per respondent.
+
+
+```{r}
+ces_selected$low_quality_count <- with(ces_selected,
+  as.integer(cps21_duplicates_pid_flag == 1) +
+  as.integer(cps21_duplicate_ip_demo_flag == 1) +
+  as.integer(pes21_speeder_low_quality == 1) +
+  as.integer(pes21_duplicates_pid_flag == 1) +
+  as.integer(cps21_inattentive == 1) +
+  as.integer(pes21_inattentive == 1)
+)
+```
+
+We convert labelled variables to readable factor levels using `as_factor()`, making the data easier to interpret and use in further exploring.
+
+```{r}
+# convert to readable entry
+ces_selected_converted <- ces_selected %>% mutate(across(where(is.labelled), as_factor))
+
+# remove the variables for checking quality
+modeling_data <- ces_selected_converted %>% select(target_var, all_of(feature_vars), disengaged_count, check_low_quality)
+```
+
+Variables used strictly for quality checks (e.g., duplicate flags) are removed from the main feature set,  
+but `disengaged_count` and the raw quality flags are retained for possible use in filtering or exploratory analysis.
