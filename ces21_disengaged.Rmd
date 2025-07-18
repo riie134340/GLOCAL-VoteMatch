@@ -86,12 +86,16 @@ To define political disengagement, the following survey items are used:
 These variables are combined into a simple count (`disengaged_count`) to reflect the number of disengagement indicators present for each respondent.
 
 ```{r}
+# Each component reflects low political interest, low media engagement, or confusion.
+# Missing values (NA) are treated as disengaged (i.e., score = 1),
+# since nonresponse may reflect a lack of political interest or attentiveness.
+
 ces_selected$disengaged_count <- with(ces_selected,
-  as.integer(pes21_follow_pol >= 3) +
-  as.integer(cps21_interest_gen_1 <= 2) +
-  as.integer(cps21_interest_elxn_1 <= 2) +
-  as.integer(cps21_news_cons %in% c(1, 7)) +
-  as.integer(cps21_govt_confusing == 5)
+  as.integer(is.na(pes21_follow_pol)      | pes21_follow_pol >= 3) +
+  as.integer(is.na(cps21_interest_gen_1)  | cps21_interest_gen_1 <= 2) +
+  as.integer(is.na(cps21_interest_elxn_1) | cps21_interest_elxn_1 <= 2) +
+  as.integer(is.na(cps21_news_cons)       | cps21_news_cons %in% c(1, 7)) +
+  as.integer(is.na(cps21_govt_confusing)  | cps21_govt_confusing == 5)
 )
 ```
 
@@ -115,14 +119,12 @@ To simplify later filtering or robustness checks, we create a `low_quality_count
 
 
 ```{r}
-ces_selected$low_quality_count <- with(ces_selected,
-  as.integer(cps21_duplicates_pid_flag == 1) +
-  as.integer(cps21_duplicate_ip_demo_flag == 1) +
-  as.integer(pes21_speeder_low_quality == 1) +
-  as.integer(pes21_duplicates_pid_flag == 1) +
-  as.integer(cps21_inattentive == 1) +
-  as.integer(pes21_inattentive == 1)
-)
+# Compute a low_quality_count score to summarize how many data quality flags each respondent triggered. 
+# Each variable is binary (0 = no issue, 1 = issue).
+# Missing values (NA) are treated as 0 (i.e., no issue), to avoid excluding respondents.
+
+ces_selected$low_quality_count <- rowSums(ces_selected[check_low_quality], na.rm = TRUE)
+table(ces_selected$low_quality_count)
 ```
 
 We convert labelled variables to readable factor levels using `as_factor()`, making the data easier to interpret and use in further exploring.
