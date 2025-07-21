@@ -1,5 +1,5 @@
 ---
-title: "Correlation test - updated"
+title: "VoteMatch - preprocessing"
 output:
   html_document:
     df_print: paged
@@ -220,7 +220,7 @@ ces_feature <- ces_feature %>% mutate(across(everything(), replace_dontknow_with
 ```{r}
 # Since We define respondents with disengaged_count ≥ 3 as politically disengaged
 # Separate low-quality respondents based on low_quality_count.
-low_quality <- ces_feature %>%
+disengaged_group <- ces_feature %>%
   filter(disengaged_count >= disengaged_threshold)
 
 ces_feature_cleaned <- ces_feature %>%
@@ -464,3 +464,11 @@ selected_cramer_vars <- setdiff(selected_cramer_vars, "Region")
 selected_model_vars <- unique(c(selected_cramer_vars, selected_kruskal_vars))
 print(selected_model_vars)
 ```
+
+### Export Data for Modeling
+
+```{r}
+ces_Modeling <- ces_feature_cleaned %>% select(all_of(selected_model_vars))
+save(ces_Modeling, disengaged_group, selected_model_vars, file = "preprocessed_data.RData")
+```
+
