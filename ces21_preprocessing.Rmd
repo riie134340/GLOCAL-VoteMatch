@@ -31,7 +31,7 @@ In addition, two variable sets are included for diagnostic purposes:
 We combine all of these into a single dataframe (`ces_selected`) to conduct correlation testing in the next step.
 
 ```{r}
-target_var <- "pes21_votechoice2021"
+votechoices <- c("pes21_votechoice2021", "cps21_votechoice")
 mia_vars <- c("pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
               "pes21_inequal", "pes21_abort2", "pes21_contact1", "Region", "cps21_marital",
               "cps21_imm_year", "cps21_bornin_canada", "cps21_rel_imp", "cps21_volunteer")
@@ -50,7 +50,7 @@ check_low_quality <- c("cps21_duplicates_pid_flag", "cps21_duplicate_ip_demo_fla
                        "pes21_speeder_low_quality","pes21_duplicates_pid_flag",
                        "cps21_inattentive","pes21_inattentive")
 
-selected_var <- unique(c(target_var, mia_vars, extra_vars, check_disengaged, check_low_quality))
+selected_var <- unique(c(votechoices, mia_vars, extra_vars, check_disengaged, check_low_quality))
 ces_selected <- ces2021 %>% select(all_of(selected_var))
 head(ces_selected)
 ```
@@ -95,7 +95,7 @@ These variables are combined into a simple count (`disengaged_count`) to reflect
 ```{r}
 # Each component reflects low political interest, low media engagement, or confusion.
 # Missing values (NA) are treated as disengaged (i.e., score = 1),
-# since nonresponse may reflect a lack of political interest or attentiveness.
+# since non-response may reflect a lack of political interest or attentiveness.
 
 ces_selected$disengaged_count <- with(ces_selected,
   as.integer(is.na(pes21_follow_pol)      | pes21_follow_pol >= 3) +
@@ -165,7 +165,7 @@ ces_selected_converted <- ces_selected %>% mutate(across(where(is.labelled), as_
 
 # remove the variables for checking quality
 ces_feature <- ces_selected_converted %>% 
-  select(all_of(c(target_var, feature_vars)), disengaged_count, low_quality_count)
+  select(all_of(c(votechoices, feature_vars)), disengaged_count, low_quality_count)
 
 head(ces_feature)
 ```
@@ -173,7 +173,58 @@ head(ces_feature)
 Variables used strictly for quality checks (e.g., duplicate flags) are removed from the main feature set,  
 but `disengaged_count` and the raw quality flags are retained for possible use in filtering or exploratory analysis. 
 
-### Data Cleaning
+
+### Data Cleaning - Set Target Variable
+
+The target variable was created by merging two columns:
+
+*pes21_votechoice2021* Which party did you vote for?
+
+- Liberal Party (1)
+- Conservative Party (2)
+- NDP (3) (Display This Choice: If In which province or territory are you currently living? = Quebec)
+- Bloc Québécois (4)
+- Green Party (5)
+- People's Party (6)
+- Another party (specify) (7): pes21_votechoice2021_7_TEXT
+- I spoiled my vote (8)
+- Don't know / Prefer not to answer (9)
+
+*cps21_votechoice* Which party do you think you will vote for?
+
+- Liberal Party (1)
+- Conservative Party (2)
+- NDP (3) (Display This Choice: If In which province or territory are you currently living? = Quebec)
+- Bloc Québécois (4)
+- Green Party (5)
+- Another party (please specify) (6): cps21_votechoice_6_TEXT
+- Don't know/ Prefer not to answer (7)
+
+The idea was to prioritize *pes21_votechoice2021* when it was not missing (NA), and if it was missing, use the value from *cps21_votechoice.*
+
+```{r}
+ces_feature$votechoice <- ifelse(!is.na(ces_feature$pes21_votechoice2021), 
+                                  as.character(ces_feature$pes21_votechoice2021), 
+                                  as.character(ces_feature$cps21_votechoice))
+unique(ces_feature$votechoice)
+```
+We identified there were issues with inconsistent formatting in the data (such as inconsistent capitalization and spacing). For example, there were variations like "Don't know/ Prefer not to answer" and "Don't know / Prefer not to answer". 
+
+To ensure consistent formatting, we converted all variations of text to a consistent format, and replaced any inconsistent spaces and symbols 
+
+```{r}
+# Standardizing Formatting
+ces_feature$votechoice <- recode(ces_feature$votechoice, 
+                                  "ndp" = "NDP",
+                                  "Don't know/ Prefer not to answer" = "Don't know / Prefer not to answer",
+                                  "Another party (please specify)" = "Another party (specify)",
+                                  .default = ces_feature$votechoice) 
+
+#ces_feature$votechoice <- factor(ces_feature$votechoice)
+#summary(ces_feature$votechoice)
+```
+
+### Data Cleaning - Check feature variables
 
 Before modeling, we examine the distribution and potential correlations of these features to decide whether they should be included in the model.
 
@@ -191,8 +242,8 @@ get_feature_levels <- function(data, column_name) {
 }
 
 for (var in feature_vars) {
-  # Skip only "duration__in_seconds_"
-  if (var == "duration__in_seconds_") next
+  # Skip only "Duration__in_seconds_"
+  if (var == "Duration__in_seconds_") next
   
   cat("\n---", var, "---\n")
   print(get_feature_levels(ces_feature, var))
@@ -211,21 +262,45 @@ replace_dontknow_with_na <- function(col) {
   }
 }
 
-# Apply the function to all columns
-ces_feature <- ces_feature %>% mutate(across(everything(), replace_dontknow_with_na))
+# Apply the function to all feature columns
+ces_feature <- ces_feature %>%
+  mutate(across(all_of(feature_vars), replace_dontknow_with_na))
 ```
 
 ### Handling disengaged data
 
+In this step, we identify and remove politically disengaged respondents and those with unclear or missing vote intentions. 
+
 ```{r}
 # Since We define respondents with disengaged_count ≥ 3 as politically disengaged
-# Separate low-quality respondents based on low_quality_count.
-disengaged_group <- ces_feature %>%
+# Separate disengaged respondents based on disengaged_threshold
+
+disengaged_responses <- ces_feature %>%
   filter(disengaged_count >= disengaged_threshold)
 
 ces_feature_cleaned <- ces_feature %>%
   filter(disengaged_count < disengaged_threshold)
+
+# Filter respondents with invalid vote choices (e.g., "Don't know" or "Spoiled vote")
+invalid_vote_choices <- c("Don't know / Prefer not to answer", "I spoiled my vote")
+invalid_vote_responses <- ces_feature_cleaned %>%
+  filter(is.na(votechoice) | votechoice %in% invalid_vote_choices)
+
+ces_feature_cleaned <- ces_feature_cleaned %>%
+  filter(!(is.na(votechoice) | votechoice %in% invalid_vote_choices))
+
+# Combine all disengaged rows
+disengaged_group <- bind_rows(disengaged_responses, invalid_vote_responses)
 ```
+
+```{r}
+ces_feature_cleaned$votechoice <- factor(ces_feature_cleaned$votechoice)
+disengaged_group$votechoice <- factor(disengaged_group$votechoice) # may not work
+```
+
+Initially, votechoice was converted to a character type, which led to issues when inspecting the data later. The values in the column became numeric codes instead of the intended text labels (e.g., "1" for "Liberal Party"). This happened because when a factor column is converted to a character type, the factor levels are lost and replaced by numeric codes.
+
+Since we plan to use votechoice as the target variable in predictive modeling, it is essential to revert it back to factor type. This is because many machine learning algorithms (e.g., logistic regression, random forest) require categorical variables to be factors, as they help the model interpret the categories correctly.
 
 ### Handling low-quality data
 
@@ -267,9 +342,7 @@ filter_by_duration <- function(data, duration_col = "Duration__in_seconds_",
       .data[[duration_col]] <= slow_threshold
     )
 }
-```
 
-```{r}
 ces_feature_cleaned <- filter_by_duration(ces_feature_cleaned)
 ```
 
@@ -297,7 +370,15 @@ list_chi <- c()
 list_kruskal <- c()
 
 # Target variable (e.g. party vote choice)
+#target_var<-"votechoice"
+#target_var<-"pes21_votechoice2021"
+#target <- ces_feature_cleaned[[target_var]]
+
+
+# Target variable (e.g. party vote choice)
+target_var <- "votechoice"
 target <- ces_feature_cleaned[[target_var]]
+#target <- ces_feature_cleaned[["votechoice"]]
 is_target_cat <- is.factor(target) || is.character(target)
 
 # Loop through feature variables
@@ -468,7 +549,7 @@ print(selected_model_vars)
 ### Export Data for Modeling
 
 ```{r}
-ces_Modeling <- ces_feature_cleaned %>% select(all_of(selected_model_vars))
+ces_Modeling <- ces_feature_cleaned %>% select(all_of(selected_model_vars), target_var)
 save(ces_Modeling, disengaged_group, selected_model_vars, file = "preprocessed_data.RData")
 ```
 

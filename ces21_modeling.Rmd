@@ -1,0 +1,38 @@
+---
+title: "VoteMatch - Modeling"
+output: html_notebook
+---
+
+#### Load Data
+
+Load the pre-processed data saved from the previous step.
+
+```{r}
+load("preprocessed_data.RData")
+
+# Check the structure of the main data
+str(ces_Modeling)
+summary(ces_Modeling)
+```
+
+
+```{r}
+# Check the selected model features
+print(selected_model_vars)
+
+# Subset the cleaned data using selected features
+model_data <- ces_feature_cleaned[, selected_model_vars]
+
+# Add the target variable
+model_data$target <- disengaged_group
+
+# Split the dataset into training and testing sets (70/30 split)
+set.seed(123)
+train_index <- sample(seq_len(nrow(model_data)), size = 0.7 * nrow(model_data))
+train_data <- model_data[train_index, ]
+test_data  <- model_data[-train_index, ]
+
+
+
+```
+
