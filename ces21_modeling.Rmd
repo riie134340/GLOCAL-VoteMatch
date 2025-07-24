@@ -5,34 +5,107 @@ output: html_notebook
 
 #### Load Data
 
-Load the pre-processed data saved from the previous step.
+We loaded the pre-processed data saved from the previous step.
+The initial dataset contained a total of 15,484 rows, with several variables related to voters' characteristics and political opinions.
 
 ```{r}
+library(dplyr)
 load("preprocessed_data.RData")
 
 # Check the structure of the main data
-str(ces_Modeling)
+colnames(ces_Modeling)
+```
+```{r}
+#str(ces_Modeling)
 summary(ces_Modeling)
 ```
+### Handling Missing Value
 
+*imm_duration*: This variable was removed due to significant missing data. It contained values resembling years of immigration, which and had a high proportion of missing values (over 13000).
+
+*Duration__in_seconds_*: This variable was used for data quality checks and was not needed in the final model. It was removed to ensure the dataset was more focused on the relevant features for prediction.
+
+*cps21_rel_imp*: Although the exact reason for the variable's importance is unclear, it was removed because its NA values had a high occurrence and were second only to immduration in terms of missingness. Additionally, its missing data did not align well with other variables, and its inclusion was not deemed essential for the prediction task.
 
 ```{r}
-# Check the selected model features
-print(selected_model_vars)
+ces_Modeling_removed <- ces_Modeling %>%
+  select(-imm_duration, -cps21_rel_imp, -Duration__in_seconds_)
 
-# Subset the cleaned data using selected features
-model_data <- ces_feature_cleaned[, selected_model_vars]
+# Remove rows with NA values in any of the features or target
+ces_Modeling_no_NA <- ces_Modeling_removed %>%
+  na.omit()
+```
 
-# Add the target variable
-model_data$target <- disengaged_group
+Rows with NA values in key variables were filtered out. After handling missing values and removing unnecessary variables, the data was reduced to approximately 11,000 rows.
 
-# Split the dataset into training and testing sets (70/30 split)
+### Data Split
+
+The dataset was split into two groups:
+
+- *train_data*: Training set (70%), used to train the model.
+- *test_data*: Testing set (30%), used to evaluate the model's performance.
+
+```{r}
 set.seed(123)
-train_index <- sample(seq_len(nrow(model_data)), size = 0.7 * nrow(model_data))
-train_data <- model_data[train_index, ]
-test_data  <- model_data[-train_index, ]
+train_index <- sample(seq_len(nrow(ces_Modeling_no_NA)), size = 0.7 * nrow(ces_Modeling_no_NA))
+train_data <- ces_Modeling_no_NA[train_index, ]
+test_data <- ces_Modeling_no_NA[-train_index, ]
+```
+
+### Model Selection
+
+Multinomial Logistic Regression and Random Forest were selected as the initial models due to their effectiveness in handling multi-class classification problems like predicting political party preference.
+
+```{r}
+# Multinomial Logistic Regression
+library(nnet)
+log_model <- multinom(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
+                        cps21_bornin_canada + cps21_marital + cps21_age,
+                        data = train_data)
+#summary(log_model)
+```
+
+```{r}
+# Random Forest
+library(randomForest)
+rf_model <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
+                        cps21_bornin_canada + cps21_marital + cps21_age,
+                        data = train_data)
+#print(rf_model)
+```
+
+### Evaluation of Model Performance
+
+```{r}
+library(ggplot2)
+library(lattice)
+
+# Use Multinomial Logistic Regression to predict
+log_predictions <- predict(log_model, newdata = test_data)
 
 
+library(caret)
+conf_matrix_log <- confusionMatrix(log_predictions, test_data$votechoice)
+print(conf_matrix_log)
+```
+
+```{r}
+
+# Use Random Forest to predict
+rf_predictions <- predict(rf_model, newdata = test_data)
+
+conf_matrix_rf <- confusionMatrix(rf_predictions, test_data$votechoice)
+print(conf_matrix_rf)
+```
+
+The models faced difficulties in predicting smaller classes like Green Party and People's Party, which had very few samples compared to larger classes like Liberal Party and Conservative Party.
+
+Based on the confusion matrix and sensitivity values, it is clear that the model needs adjustments. Adjusting class weights is one potential solution to improve predictions for the minority classes.
+
+### Model Adjustments
+
+```{r}
 
 ```
+
 
