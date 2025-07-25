@@ -108,7 +108,7 @@ ces_selected$disengaged_count <- with(ces_selected,
 print("Distribution of disengaged_count:")
 table(ces_selected$disengaged_count)
 ```
-We define respondents with disengaged_count ≥ 3 as politically disengaged.
+We define respondents with disengaged_count >= 3 as politically disengaged.
 This threshold reflects a combination of at least 3 disengagement indicators,and captures roughly 8% of the sample.
 
 ```{r}
@@ -145,7 +145,7 @@ ces_selected$low_quality_count <- rowSums(ces_selected[check_low_quality], na.rm
 print("Distribution of low_quality_count:")
 table(ces_selected$low_quality_count)
 ```
-Based on this distribution, we define low_quality_count ≥ 3 as low quality.
+Based on this distribution, we define low_quality_count >= 3 as low quality.
 
 Note: This is the first round of cleaning. 
 A second round of filtering based on survey duration (e.g., too fast or too slow) will be applied later.
@@ -326,10 +326,15 @@ ces_feature <- ces_feature %>%
   )
 table(ces_feature$votechoice, useNA = "ifany")
 
+ces_feature <- ces_feature %>%
+  filter(votechoice != "Another party")
+
+
 #unmapped_rows <- ces_feature %>%   filter(votechoice == "Another party")
 #unique(unmapped_rows$another_text)
 ```
-After applying the mapping, some records moved from `"Another party"` to more specific classes.
+
+After applying the mapping, some records originally labeled as "Another party" were reclassified into more specific categories (e.g., Green Party, People’s Party, etc.). The remaining "Another party" cases were too few in number and too heterogeneous in content to be analytically meaningful, so they were excluded from the modeling.
 
 ### Data Cleaning - Check feature variables
 
@@ -379,7 +384,7 @@ ces_feature <- ces_feature %>%
 In this step, we identify and remove politically disengaged respondents and those with unclear or missing vote intentions. 
 
 ```{r}
-# Since We define respondents with disengaged_count ≥ 3 as politically disengaged
+# Since We define respondents with disengaged_count >= 3 as politically disengaged
 # Separate disengaged respondents based on disengaged_threshold
 
 disengaged_responses <- ces_feature %>%
@@ -460,12 +465,6 @@ This helps reduce noise from unreliable responses (e.g., inconsistent answers or
 ```{r}
 ces_feature_cleaned <- ces_feature_cleaned %>% filter(low_quality_count <= low_quality_threshold)
 ```
-
-
-
-
-#==========================================================================
-
 
 
 ### Pre-step for Correlation Test

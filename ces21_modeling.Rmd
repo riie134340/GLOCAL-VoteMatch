@@ -3,7 +3,7 @@ title: "VoteMatch - Modeling"
 output: html_notebook
 ---
 
-#### Load Data
+### Load Data
 
 We loaded the pre-processed data saved from the previous step.
 The initial dataset contained a total of 15,484 rows, with several variables related to voters' characteristics and political opinions.
@@ -56,22 +56,23 @@ test_data <- ces_Modeling_no_NA[-train_index, ]
 
 ### Model Selection
 
-Multinomial Logistic Regression and Random Forest were selected as the initial models due to their effectiveness in handling multi-class classification problems like predicting political party preference.
+This project aimed to predict party vote choice using two models:
+
+- Multinomial Logistic Regression
+- Random Forest Classifier
+
+The models were trained on the dataset, with cross-validation used for performance evaluation, and subsequently tested on a separate test dataset.
 
 ```{r}
 # Multinomial Logistic Regression
-log_model <- multinom(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
+log_model_1 <- multinom(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
                         cps21_bornin_canada + cps21_marital + cps21_age,
-                        data = train_data)
-#summary(log_model)
-```
+                        data = train_data, verbose = FALSE)
 
-```{r}
 # Random Forest
-rf_model <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
+rf_model_1 <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
                         cps21_bornin_canada + cps21_marital + cps21_age,
                         data = train_data)
-#print(rf_model)
 ```
 
 ### Evaluation of Model Performance
@@ -82,29 +83,97 @@ library(lattice)
 library(caret)
 
 # Use Multinomial Logistic Regression to predict
-log_predictions <- predict(log_model, newdata = test_data)
+log_predictions_1 <- predict(log_model_1, newdata = test_data)
 
-conf_matrix_log <- confusionMatrix(log_predictions, test_data$votechoice)
-print(conf_matrix_log)
-```
+conf_matrix_log <- confusionMatrix(log_predictions_1, test_data$votechoice)
 
-```{r}
 
 # Use Random Forest to predict
-rf_predictions <- predict(rf_model, newdata = test_data)
+rf_predictions_1 <- predict(rf_model_1, newdata = test_data)
 
-conf_matrix_rf <- confusionMatrix(rf_predictions, test_data$votechoice)
+conf_matrix_rf <- confusionMatrix(rf_predictions_1, test_data$votechoice)
+
+# Print Result
+cat("\n---", "log_predictions_1", "---\n")
+print(conf_matrix_log)
+cat("\n---", "rf_predictions_1", "---\n")
 print(conf_matrix_rf)
 ```
 
-The models faced difficulties in predicting smaller classes like Green Party and People's Party, which had very few samples compared to larger classes like Liberal Party and Conservative Party.
+The models faced difficulties in predicting smaller classes like Green Party, which had very few samples compared to larger classes like Liberal Party and Conservative Party.
 
 Based on the confusion matrix and sensitivity values, it is clear that the model needs adjustments. Adjusting class weights is one potential solution to improve predictions for the minority classes.
 
 ### Model Adjustments
 
+```{r results = 'hide'}
+# Define class weights (assign higher weights to minority classes)
+class_weights <- c('Bloc Québécois' = 1, 
+                   'Conservative Party' = 1, 
+                   'Green Party' = 2,   # Higher weight for the minority class
+                   'Liberal Party' = 1, 
+                   'NDP' = 1, 
+                   'People\'s Party' = 2)  # Higher weight for the minority class
+
+# Train random forest model with class weights
+rf_model_2 <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 + 
+                         cps21_bornin_canada + cps21_marital + cps21_age, 
+                         data = train_data, 
+                         classwt = class_weights)
+
+
+# Define class weights for Multinomial Logistic Regression
+train_data_2<-train_data
+train_data_2$weights <- ifelse(train_data$votechoice == "Bloc Québécois", 1,
+                             ifelse(train_data$votechoice == "Conservative Party", 1,
+                                    ifelse(train_data$votechoice == "Green Party", 2,
+                                           ifelse(train_data$votechoice == "Liberal Party", 1,
+                                                  ifelse(train_data$votechoice == "NDP", 1, 
+                                                         2)))))
+
+# Train Multinomial Logistic Regression model with class weights
+log_model_2 <- train(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 + 
+                   cps21_bornin_canada + cps21_marital + cps21_age, 
+                   data = train_data_2,
+                   method = "multinom",  
+                   trControl = trainControl(method = "cv", number = 10, verboseIter = FALSE), 
+                   weights = train_data_2$weights)
+
+```
+
+### Evaluation of Adjusted Model Performance (Second Prediction)
+
+```{r}
+# Use Multinomial Logistic Regression to predict
+log_predictions_2 <- predict(log_model_2, newdata = test_data)
+
+conf_matrix_log <- confusionMatrix(log_predictions_2, test_data$votechoice)
+
+
+# Use Random Forest to predict
+rf_predictions_2 <- predict(rf_model_2, newdata = test_data)
+
+conf_matrix_rf <- confusionMatrix(rf_predictions_2, test_data$votechoice)
+
+# Print Result
+cat("\n---", "log_predictions_2", "---\n")
+print(conf_matrix_log)
+cat("\n---", "rf_predictions_2", "---\n")
+print(conf_matrix_rf)
+```
+
+*Multinomial Logistic Regression*: 
+
+Adjusting class weights led to an increase in performance for the Bloc Québécois and Conservative Party classes, but the Green Party and People's Party continue to be problematic with low sensitivity scores. There seems to be overfitting with the dominant classes, while the minority classes are still underrepresented.
+
+*Random Forest*:
+
+After adjusting the class weights, the accuracy dropped significantly from 64.32% to 52.48%. While the model's sensitivity for Bloc Québécois and Conservative Party improved, it failed to improve prediction performance for the minority classes, such as Green Party and People's Party, which continued to have low sensitivity values.
+
+The Green Party and People's Party remain underrepresented, which suggests that further improvements are needed for minority class predictions, indicating a need for further refinement or use of additional techniques (e.g., SMOTE).
+
+
 ```{r}
 
 ```
 
-"In the CPS wave, the People's Party was not included as a main option in the vote intention question. Respondents who selected 'Another party' and explicitly wrote in People's Party-related responses were recoded accordingly. These recoded responses were flagged and included in the model with appropriate caution."
