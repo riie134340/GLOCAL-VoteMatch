@@ -10,6 +10,8 @@ The initial dataset contained a total of 15,484 rows, with several variables rel
 
 ```{r}
 library(dplyr)
+library(nnet)
+library(randomForest)
 load("preprocessed_data.RData")
 
 # Check the structure of the main data
@@ -58,7 +60,6 @@ Multinomial Logistic Regression and Random Forest were selected as the initial m
 
 ```{r}
 # Multinomial Logistic Regression
-library(nnet)
 log_model <- multinom(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
                         cps21_bornin_canada + cps21_marital + cps21_age,
                         data = train_data)
@@ -67,7 +68,6 @@ log_model <- multinom(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_in
 
 ```{r}
 # Random Forest
-library(randomForest)
 rf_model <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
                         cps21_bornin_canada + cps21_marital + cps21_age,
                         data = train_data)
@@ -79,12 +79,11 @@ rf_model <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21
 ```{r}
 library(ggplot2)
 library(lattice)
+library(caret)
 
 # Use Multinomial Logistic Regression to predict
 log_predictions <- predict(log_model, newdata = test_data)
 
-
-library(caret)
 conf_matrix_log <- confusionMatrix(log_predictions, test_data$votechoice)
 print(conf_matrix_log)
 ```
@@ -108,4 +107,4 @@ Based on the confusion matrix and sensitivity values, it is clear that the model
 
 ```
 
-
+"In the CPS wave, the People's Party was not included as a main option in the vote intention question. Respondents who selected 'Another party' and explicitly wrote in People's Party-related responses were recoded accordingly. These recoded responses were flagged and included in the model with appropriate caution."

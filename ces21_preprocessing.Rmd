@@ -17,7 +17,6 @@ library(tidyverse)
 ces2021 <- read_dta("dataverse_files/2021 Canadian Election Study v2.0.dta")
 ```
 
-
 ### Selecting variables
 
 Before building any predictive model, we begin by selecting a set of variables to explore their relationships with the target variable (`pes21_votechoice2021`), as well as among themselves.
@@ -31,7 +30,8 @@ In addition, two variable sets are included for diagnostic purposes:
 We combine all of these into a single dataframe (`ces_selected`) to conduct correlation testing in the next step.
 
 ```{r}
-votechoices <- c("pes21_votechoice2021", "cps21_votechoice")
+vote_choices <- c("pes21_votechoice2021", "cps21_votechoice","pes21_votechoice2021_7_TEXT", 
+                  "cps21_votechoice_6_TEXT")
 mia_vars <- c("pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
               "pes21_inequal", "pes21_abort2", "pes21_contact1", "Region", "cps21_marital",
               "cps21_imm_year", "cps21_bornin_canada", "cps21_rel_imp", "cps21_volunteer")
@@ -50,7 +50,7 @@ check_low_quality <- c("cps21_duplicates_pid_flag", "cps21_duplicate_ip_demo_fla
                        "pes21_speeder_low_quality","pes21_duplicates_pid_flag",
                        "cps21_inattentive","pes21_inattentive")
 
-selected_var <- unique(c(votechoices, mia_vars, extra_vars, check_disengaged, check_low_quality))
+selected_var <- unique(c(vote_choices, feature_vars, check_disengaged, check_low_quality))
 ces_selected <- ces2021 %>% select(all_of(selected_var))
 head(ces_selected)
 ```
@@ -165,7 +165,7 @@ ces_selected_converted <- ces_selected %>% mutate(across(where(is.labelled), as_
 
 # remove the variables for checking quality
 ces_feature <- ces_selected_converted %>% 
-  select(all_of(c(votechoices, feature_vars)), disengaged_count, low_quality_count)
+  select(all_of(c(vote_choices, feature_vars)), disengaged_count, low_quality_count)
 
 head(ces_feature)
 ```
@@ -203,9 +203,20 @@ The target variable was created by merging two columns:
 The idea was to prioritize *pes21_votechoice2021* when it was not missing (NA), and if it was missing, use the value from *cps21_votechoice.*
 
 ```{r}
-ces_feature$votechoice <- ifelse(!is.na(ces_feature$pes21_votechoice2021), 
-                                  as.character(ces_feature$pes21_votechoice2021), 
-                                  as.character(ces_feature$cps21_votechoice))
+ces_feature <- ces_feature %>%
+  mutate(
+    votechoice = case_when(
+      !is.na(pes21_votechoice2021) ~ as.character(pes21_votechoice2021),
+      !is.na(cps21_votechoice) ~ as.character(cps21_votechoice),
+      TRUE ~ NA_character_
+    ),
+    vote_source = case_when(
+      !is.na(pes21_votechoice2021) ~ "pes",
+      !is.na(cps21_votechoice) ~ "cps",
+      TRUE ~ NA_character_
+    )
+  )
+
 unique(ces_feature$votechoice)
 ```
 We identified there were issues with inconsistent formatting in the data (such as inconsistent capitalization and spacing). For example, there were variations like "Don't know/ Prefer not to answer" and "Don't know / Prefer not to answer". 
@@ -221,8 +232,104 @@ ces_feature$votechoice <- recode(ces_feature$votechoice,
                                   .default = ces_feature$votechoice) 
 
 #ces_feature$votechoice <- factor(ces_feature$votechoice)
-#summary(ces_feature$votechoice)
+table(ces_feature$votechoice, useNA = "ifany")
 ```
+#### Handling "Another party (specify)" Responses
+
+In the raw dataset, vote choices were coded into predefined categories (e.g., Liberal, Conservative, NDP, etc.).  
+However, some respondents selected **"Another party (specify)"**, which allowed them to write in a custom party name.  
+
+Upon inspection, we found **275** such responses, stored in the free-text fields:
+- `pes21_votechoice2021_7_TEXT` (post-election survey)
+- `cps21_votechoice_6_TEXT` (pre-election survey)
+
+These responses were initially assigned the label `"Another party"`, making them uninformative for modeling.
+
+While small in number, these write-in responses contain meaningful data:
+- Some match known parties like **People’s Party**, **Bloc Québécois**, or **Green Party**
+- Others reflect **independent candidates** or **small/obscure parties**
+- A portion includes **spoiled ballots**, **protest votes**, or **intentional ambiguity** (e.g., "None of your business")
+
+Without processing, they would either be dropped (as NA) or lumped into a generic "Other" class.
+```{r}
+map_another_to_main_parties <- function(text) {
+  text <- tolower(trimws(text))
+
+  case_when(
+    # Spoiled or protest vote
+    grepl("spoil|annul|cancel|decline|private|blank|secret ballot|none of your business|don't vote", text) ~ "I spoiled my vote",
+
+    # People's Party
+    grepl("ppc|people.?s party|parti populaire|popular party", text) ~ "People's Party",
+
+    # Bloc Québécois
+    grepl("bloc", text) ~ "Bloc Québécois",
+
+    # Green Party
+    grepl("green", text) |
+      grepl("protection des animaux|animal protection", text) ~ "Green Party",
+
+    # Liberal
+    grepl("liberal", text) ~ "Liberal Party",
+
+    # Conservative
+    grepl("conservative|pcc|pcp|cpp", text) ~ "Conservative Party",
+
+    # NDP
+    grepl("ndp|new democratic|npd", text) ~ "NDP",
+
+    # Independent, Maverick, Communist, etc.
+    grepl("independent|maverick|rhinoceros|communist|libertarian|parti libre|christian heritage|chp", text) ~ "Another party",
+
+    # Uncertain or undecided
+    grepl("undecid|indécis|i don't know|incertain|not sure|je vais probablement", text) ~ "Don't know / Prefer not to answer",
+
+    # Anything else
+    TRUE ~ "Another party"
+  )
+}
+```
+
+To recover this information, we implemented a custom mapping function to classify free-text responses into 9 categories:
+
+1. Liberal Party  
+2. Conservative Party  
+3. NDP  
+4. Green Party  
+5. Bloc Québécois  
+6. People’s Party  
+7. Another party (small or independent parties)  
+8. Spoiled / Protest vote  
+9. Don't know / Prefer not to answer
+
+This mapping was applied **after** merging vote choices from both surveys and **after** standardizing vote labels.
+
+```{r}
+# Merged another party choice
+ces_feature <- ces_feature %>%
+  mutate(
+    another_text = case_when(
+      votechoice == "Another party (specify)" & vote_source == "pes" ~ pes21_votechoice2021_7_TEXT,
+      votechoice == "Another party (specify)" & vote_source == "cps" ~ cps21_votechoice_6_TEXT,
+      TRUE ~ NA_character_
+    )
+  )
+
+# replace votechoice
+ces_feature <- ces_feature %>%
+  mutate(
+    votechoice = if_else(
+      votechoice == "Another party (specify)" ,
+      map_another_to_main_parties(another_text),
+      votechoice
+    )
+  )
+table(ces_feature$votechoice, useNA = "ifany")
+
+#unmapped_rows <- ces_feature %>%   filter(votechoice == "Another party")
+#unique(unmapped_rows$another_text)
+```
+After applying the mapping, some records moved from `"Another party"` to more specific classes.
 
 ### Data Cleaning - Check feature variables
 
@@ -354,6 +461,13 @@ This helps reduce noise from unreliable responses (e.g., inconsistent answers or
 ces_feature_cleaned <- ces_feature_cleaned %>% filter(low_quality_count <= low_quality_threshold)
 ```
 
+
+
+
+#==========================================================================
+
+
+
 ### Pre-step for Correlation Test
 
 Since these features are of different types and most of them are non-numeric. We cannot apply a single, unified statistical method. 
@@ -401,6 +515,7 @@ print(list_chi)
 cat("\nVariables for Kruskal-Wallis (numeric or ordered):\n")
 print(list_kruskal)
 ```
+
 ### Correlation Test
 
 For the features in list_chi, we compute their correlation with the target variable (party vote choice) using Cramér's V. The calculation uses the cramerV() function from the rcompanion package, which automatically removes observations with missing values (NA).
