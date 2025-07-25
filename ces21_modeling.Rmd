@@ -1,6 +1,11 @@
 ---
 title: "VoteMatch - Modeling"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document:
+    latex_engine: xelatex
 ---
 
 ### Load Data
@@ -8,10 +13,13 @@ output: html_notebook
 We loaded the pre-processed data saved from the previous step.
 The initial dataset contained a total of 15,484 rows, with several variables related to voters' characteristics and political opinions.
 
-```{r}
+```{r load-libs, message=FALSE}
 library(dplyr)
 library(nnet)
 library(randomForest)
+library(ggplot2)
+library(lattice)
+library(caret)
 load("preprocessed_data.RData")
 
 # Check the structure of the main data
@@ -78,10 +86,6 @@ rf_model_1 <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes
 ### Evaluation of Model Performance
 
 ```{r}
-library(ggplot2)
-library(lattice)
-library(caret)
-
 # Use Multinomial Logistic Regression to predict
 log_predictions_1 <- predict(log_model_1, newdata = test_data)
 
@@ -162,11 +166,11 @@ cat("\n---", "rf_predictions_2", "---\n")
 print(conf_matrix_rf)
 ```
 
-*Multinomial Logistic Regression*: 
+**Multinomial Logistic Regression**: 
 
 Adjusting class weights led to an increase in performance for the Bloc Québécois and Conservative Party classes, but the Green Party and People's Party continue to be problematic with low sensitivity scores. There seems to be overfitting with the dominant classes, while the minority classes are still underrepresented.
 
-*Random Forest*:
+**Random Forest**:
 
 After adjusting the class weights, the accuracy dropped significantly from 64.32% to 52.48%. While the model's sensitivity for Bloc Québécois and Conservative Party improved, it failed to improve prediction performance for the minority classes, such as Green Party and People's Party, which continued to have low sensitivity values.
 
