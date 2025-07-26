@@ -6,6 +6,7 @@ output:
   html_notebook: default
   pdf_document:
     latex_engine: xelatex
+output_dir: output
 ---
 
 ### Load Data
