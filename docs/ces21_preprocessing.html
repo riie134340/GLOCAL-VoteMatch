@@ -1646,14 +1646,14 @@ inattentiveness).</p>
 step.</p>
 <pre class="r"><code>vote_choices &lt;- c(&quot;pes21_votechoice2021&quot;, &quot;cps21_votechoice&quot;,&quot;pes21_votechoice2021_7_TEXT&quot;, 
                   &quot;cps21_votechoice_6_TEXT&quot;)
-mia_vars &lt;- c(&quot;pes21_province&quot;, &quot;cps21_age&quot;, &quot;pes21_follow_pol&quot;, &quot;pes21_rural_urban&quot;, 
+some_vars &lt;- c(&quot;pes21_province&quot;, &quot;cps21_age&quot;, &quot;pes21_follow_pol&quot;, &quot;pes21_rural_urban&quot;, 
               &quot;pes21_inequal&quot;, &quot;pes21_abort2&quot;, &quot;pes21_contact1&quot;, &quot;Region&quot;, &quot;cps21_marital&quot;,
               &quot;cps21_imm_year&quot;, &quot;cps21_bornin_canada&quot;, &quot;cps21_rel_imp&quot;, &quot;cps21_volunteer&quot;)
 
 extra_vars &lt;- c(&quot;cps21_education&quot;,&quot;pes21_lived&quot;, &quot;cps21_fed_gov_sat&quot;, &quot;Duration__in_seconds_&quot;)
 
 # Merge selected variables
-feature_vars &lt;- unique(c(mia_vars, extra_vars))
+feature_vars &lt;- unique(c(some_vars, extra_vars))
 
 
 # use for check data quality
@@ -2225,7 +2225,7 @@ ces_feature_cleaned &lt;- ces_feature_cleaned %&gt;%
 # Combine all disengaged rows
 disengaged_group &lt;- bind_rows(disengaged_responses, invalid_vote_responses)</code></pre>
 <pre class="r"><code>ces_feature_cleaned$votechoice &lt;- factor(ces_feature_cleaned$votechoice)
-disengaged_group$votechoice &lt;- factor(disengaged_group$votechoice) # may not work</code></pre>
+disengaged_group$votechoice &lt;- factor(disengaged_group$votechoice)</code></pre>
 <p>Initially, votechoice was converted to a character type, which led to
 issues when inspecting the data later. The values in the column became
 numeric codes instead of the intended text labels (e.g., “1” for
