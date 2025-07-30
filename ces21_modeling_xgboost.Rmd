@@ -1,0 +1,172 @@
+---
+title: "Modeling - xgboost"
+output: html_notebook
+---
+
+### Load Data
+
+We loaded the pre-processed data saved from the previous step.
+The initial dataset contained a total of 15,484 rows, with several variables related to voters' characteristics and political opinions.
+
+```{r load-libs, message=FALSE}
+rm(list = ls())
+library(dplyr)
+library(xgboost)
+library(caret)
+
+#load("preprocessed_data.RData")
+load("scripts/preprocessed_data_2.RData")
+
+
+
+# Check the structure of the main data
+colnames(ces_Modeling)
+
+ces_Modeling <- ces_Modeling %>%
+  select(-imm_duration, -cps21_rel_imp, -Duration__in_seconds_)
+```
+
+```{r}
+add_vars <- c("pes21_paymed", "pes21_senate", "pes21_losetouch", "pes21_hatespeech", 
+              "pes21_envirojob", "pes21_govtcare", "pes21_famvalues", "pes21_bilingualism",
+              "pes21_equalrights","pes21_fitin","pes21_immigjobs","pes21_foreign", "pes21_emb_satif",
+              "pes21_donerm", "pes21_privjobs", "pes21_stdofliving", "pes21_trust", "pes21_newerlife")
+feature_cols <- names(ces_Modeling)
+
+duplicated_cols <- intersect(add_vars, feature_cols)
+duplicated_cols
+
+# 重复数量
+length(add_vars)
+length(duplicated_cols)
+```
+
+```{r}
+na_counts <- sapply(ces_Modeling, function(x) sum(is.na(x)))
+high_na_cols <- names(na_counts[na_counts > 4000])
+na_counts[high_na_cols]
+
+
+duplicated_cols <- intersect(add_vars, high_na_cols)
+duplicated_cols
+
+# 重复数量
+length(duplicated_cols)
+```
+
+```{r}
+modeling_var_clean <- ces_Modeling %>%
+  select(-all_of(high_na_cols))
+#modeling_var_clean <- ces_Modeling[, na_counts <= 9000]
+
+# Remove rows with NA values in any of the features or target
+# modeling_var_clean <- modeling_var_clean %>% na.omit()
+summary(modeling_var_clean)
+```
+
+
+```{r}
+set.seed(123)
+train_index <- sample(seq_len(nrow(modeling_var_clean)), size = 0.7 * nrow(modeling_var_clean))
+train_data <- modeling_var_clean[train_index, ]
+test_data <- modeling_var_clean[-train_index, ]
+```
+
+
+### XGBoost
+
+```{r}
+library(xgboost)
+
+# 将所有因子列转换为数值型
+train_data_numeric <- train_data %>%
+  mutate_if(is.factor, as.numeric)
+test_data_numeric <- test_data %>%
+  mutate_if(is.factor, as.numeric)
+
+# 检查转换结果
+str(train_data_numeric)
+```
+
+
+```{r}
+# 统计每个类别的样本数
+class_counts <- table(train_data_numeric$votechoice)
+# 总样本数
+total_count <- sum(class_counts)
+# 类别数
+n_class <- length(class_counts)
+
+# 为每个类别计算权重： total / (n_class * freq)
+# 这样所有类别加起来的总权重大约等于总样本数
+class_weights_map <- total_count / (n_class * class_counts)
+# 查看各类别对应的权重
+class_weights_map
+
+```
+
+
+
+```{r}
+# 创建一个与 train_data_numeric 行数相同的权重向量
+sample_weights <- class_weights_map[ as.character(train_data_numeric$votechoice) ]
+# 查看前几行，确保权重对应正确
+head(sample_weights)
+
+```
+```{r}
+# 特征矩阵（去掉 votechoice 列）
+train_matrix <- as.matrix(train_data_numeric[, setdiff(names(train_data_numeric), "votechoice")])
+# 标签（0-indexed）
+train_label <- as.numeric(train_data_numeric$votechoice) - 1
+
+# 带样本权重的 DMatrix
+dtrain <- xgb.DMatrix(
+  data   = train_matrix,
+  label  = train_label,
+  weight = sample_weights
+)
+
+params <- list(
+  objective        = "multi:softprob",  # multi:softprob 可以输出各类别概率
+  num_class        = n_class,          # 类别数
+  eval_metric      = "mlogloss",       # 多分类对数损失
+  eta              = 0.1,              # 学习率
+  max_depth        = 6,                # 树最大深度
+  min_child_weight = 1,                # 叶子节点最小样本权重
+  subsample        = 0.8,              # 样本采样比例
+  colsample_bytree = 0.8,              # 特征采样比例
+  gamma            = 0                 # 分裂所需最小损失减少
+)
+
+# 训练
+xg_model <- xgb.train(
+  params    = params,
+  data      = dtrain,
+  nrounds   = 100,
+  verbose   = 0
+)
+
+```
+
+```{r}
+# 构造测试集 DMatrix（不需要 weight）
+dtest <- xgb.DMatrix(
+  data  = as.matrix(test_data_numeric[, setdiff(names(test_data_numeric), "votechoice")]),
+  label = as.numeric(test_data_numeric$votechoice) - 1
+)
+
+# 输出概率
+pred_prob <- predict(xg_model, newdata = dtest)
+# 将概率矩阵转换为类别索引
+pred_mat  <- matrix(pred_prob, ncol = n_class, byrow = TRUE)
+pred_idx  <- max.col(pred_mat) - 1
+# 转回原始标签
+pred_labels <- factor(pred_idx, levels = 0:(n_class-1), labels = levels(train_data$votechoice))
+
+# 评估
+library(caret)
+confusionMatrix(pred_labels, test_data$votechoice)
+
+```
+

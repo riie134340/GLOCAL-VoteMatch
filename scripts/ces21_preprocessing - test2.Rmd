@@ -1,0 +1,675 @@
+---
+title: "VoteMatch - preprocessing"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+### Imported dataset
+
+```{r setup, include=FALSE}
+rm(list = ls())
+
+library(haven)
+library(tidyverse)
+
+ces2021 <- read_dta("../dataverse_files/2021 Canadian Election Study v2.0.dta")
+```
+
+### Selecting variables
+
+Before building any predictive model, we begin by selecting a set of variables to explore their relationships with the target variable (`pes21_votechoice2021`), as well as among themselves.
+
+- `feature_vars` contains variables potentially relevant predictors we need to explore.
+
+In addition, two variable sets are included for diagnostic purposes:
+- `check_disengaged`: used to identify politically disengaged respondents.
+- `check_low_quality`: used to flag low-quality or problematic responses (e.g., duplicates, speeders, inattentiveness).
+
+We combine all of these into a single dataframe (`ces_selected`) to conduct correlation testing in the next step.
+
+```{r}
+vote_choices <- c("pes21_votechoice2021", "cps21_votechoice","pes21_votechoice2021_7_TEXT", 
+                  "cps21_votechoice_6_TEXT")
+some_vars <- c("pes21_province", "cps21_age", "pes21_follow_pol", "pes21_rural_urban", 
+              "pes21_inequal", "pes21_abort2", "pes21_contact1", "Region", "cps21_marital",
+              "cps21_imm_year", "cps21_bornin_canada", "cps21_rel_imp", "cps21_volunteer")
+
+extra_vars <- c("cps21_education","pes21_lived", "cps21_fed_gov_sat", "Duration__in_seconds_")
+
+add_vars <- c("pes21_paymed", "pes21_senate", "pes21_losetouch", "pes21_hatespeech", 
+              "pes21_envirojob", "pes21_govtcare", "pes21_famvalues", "pes21_bilingualism",
+              "pes21_equalrights","pes21_fitin","pes21_immigjobs","pes21_foreign", "pes21_emb_satif",
+              "pes21_donerm", "pes21_privjobs", "pes21_stdofliving", "pes21_trust", "pes21_newerlife")
+
+
+# Merge selected variables
+#feature_vars <- unique(c(some_vars, extra_vars))
+feature_vars <- unique(c(some_vars, add_vars, extra_vars))
+
+# use for check data quality
+check_disengaged <- c("pes21_follow_pol", "cps21_interest_gen_1", "cps21_interest_elxn_1",
+                      "cps21_news_cons","cps21_govt_confusing")
+
+check_low_quality <- c("cps21_duplicates_pid_flag", "cps21_duplicate_ip_demo_flag", 
+                       "pes21_speeder_low_quality","pes21_duplicates_pid_flag",
+                       "cps21_inattentive","pes21_inattentive")
+
+selected_var <- unique(c(vote_choices, feature_vars, check_disengaged, check_low_quality))
+ces_selected <- ces2021 %>% select(all_of(selected_var))
+head(ces_selected)
+```
+
+### Creating disengagement and data quality flags
+
+#### identify disengagement group
+
+To define political disengagement, the following survey items are used:
+
+*pes21_follow_pol* And how closely do you follow politics on TV, radio, newspapers, or the Internet?
+
+- Very closely (1)
+- Fairly closely (2)
+- Not very closely (3)
+- Not at all (4)
+
+*cps21_interest_gen_1* How interested are you in politics generally? Set the slider to a number from 0 to 10, where 0 means no interest at all, and 10 means a great deal of interest.
+
+*cps21_interest_elxn_1* How interested are you in this federal election? Set the slider to a number from 0 to 10, where 0 means no interest at all, and 10 means a great deal of interest.
+
+*cps21_news_cons* On average, how much time do you usually spend watching, reading, and listening to news each day?
+
+- None (1)
+- 1-10 minutes (2)
+- 11-30 minutes (3)
+- 31-60 minutes (4)
+- Between 1 and 2 hours (5)
+- More than 2 hours (6)
+- Don't know/ Prefer not to answer (7)
+
+*cps21_govt_confusing* Sometimes, politics and government seem so complicated that a person like me can't really understand what's going on.
+
+- Strongly disagree (1)
+- Somewhat disagree (2)
+- Somewhat agree (3)
+- Strongly agree (4)
+- Don't know/ Prefer not to answer (5)
+
+These variables are combined into a simple count (`disengaged_count`) to reflect the number of disengagement indicators present for each respondent.
+
+```{r}
+# Each component reflects low political interest, low media engagement, or confusion.
+# Missing values (NA) are treated as disengaged (i.e., score = 1),
+# since non-response may reflect a lack of political interest or attentiveness.
+
+ces_selected$disengaged_count <- with(ces_selected,
+  as.integer(is.na(pes21_follow_pol)      | pes21_follow_pol >= 3) +
+  as.integer(is.na(cps21_interest_gen_1)  | cps21_interest_gen_1 <= 2) +
+  as.integer(is.na(cps21_interest_elxn_1) | cps21_interest_elxn_1 <= 2) +
+  as.integer(is.na(cps21_news_cons)       | cps21_news_cons %in% c(1, 7)) +
+  as.integer(is.na(cps21_govt_confusing)  | cps21_govt_confusing == 5)
+)
+
+print("Distribution of disengaged_count:")
+table(ces_selected$disengaged_count)
+```
+We define respondents with disengaged_count >= 3 as politically disengaged.
+This threshold reflects a combination of at least 3 disengagement indicators,and captures roughly 8% of the sample.
+
+```{r}
+disengaged_threshold <- 3
+```
+
+#### identify low quality group
+
+According to the original codebook, a number of severe data quality issues (e.g., incomplete responses, failed attention checks, straightlining) were already removed from the public dataset.
+
+However, some respondents were flagged for less-severe issues and retained. These include:
+- Inattentive respondents (e.g., those taking unusually long to complete the survey)
+- Duplicate IP/demo matches
+- Initial duplicates
+- PES speeders (respondents who completed the post-election survey unusually fast)
+
+We use the following variables to track these lower-level quality concerns:
+- `cps21_duplicates_pid_flag`
+- `cps21_duplicate_ip_demo_flag`
+- `cps21_inattentive`
+- `pes21_speeder_low_quality`
+- `pes21_duplicates_pid_flag`
+- `pes21_inattentive`
+
+To simplify later filtering or robustness checks, we create a `low_quality_count` variable to count how many of these flags are triggered per respondent.
+
+```{r}
+# Compute a low_quality_count score to summarize how many data quality flags each respondent triggered. 
+# Each variable is binary (0 = no issue, 1 = issue).
+# Missing values (NA) are treated as 0 (i.e., no issue), to avoid excluding respondents.
+
+ces_selected$low_quality_count <- rowSums(ces_selected[check_low_quality], na.rm = TRUE)
+
+print("Distribution of low_quality_count:")
+table(ces_selected$low_quality_count)
+```
+Based on this distribution, we define low_quality_count >= 3 as low quality.
+
+Note: This is the first round of cleaning. 
+A second round of filtering based on survey duration (e.g., too fast or too slow) will be applied later.
+
+
+```{r}
+low_quality_threshold <- 3
+```
+
+#### remove unnecessary variables
+
+We convert labelled variables to readable factor levels using `as_factor()`, making the data easier to interpret and use in further exploring.
+
+```{r}
+# convert to readable entry
+ces_selected_converted <- ces_selected %>% mutate(across(where(is.labelled), as_factor))
+
+# remove the variables for checking quality
+ces_feature <- ces_selected_converted %>% 
+  select(all_of(c(vote_choices, feature_vars)), disengaged_count, low_quality_count)
+
+head(ces_feature)
+```
+
+Variables used strictly for quality checks (e.g., duplicate flags) are removed from the main feature set,  
+but `disengaged_count` and the raw quality flags are retained for possible use in filtering or exploratory analysis. 
+
+
+### Data Cleaning - Set Target Variable
+
+The target variable was created by merging two columns:
+
+*pes21_votechoice2021* Which party did you vote for?
+
+- Liberal Party (1)
+- Conservative Party (2)
+- NDP (3) (Display This Choice: If In which province or territory are you currently living? = Quebec)
+- Bloc Québécois (4)
+- Green Party (5)
+- People's Party (6)
+- Another party (specify) (7): pes21_votechoice2021_7_TEXT
+- I spoiled my vote (8)
+- Don't know / Prefer not to answer (9)
+
+*cps21_votechoice* Which party do you think you will vote for?
+
+- Liberal Party (1)
+- Conservative Party (2)
+- NDP (3) (Display This Choice: If In which province or territory are you currently living? = Quebec)
+- Bloc Québécois (4)
+- Green Party (5)
+- Another party (please specify) (6): cps21_votechoice_6_TEXT
+- Don't know/ Prefer not to answer (7)
+
+The idea was to prioritize *pes21_votechoice2021* when it was not missing (NA), and if it was missing, use the value from *cps21_votechoice.*
+
+```{r}
+ces_feature <- ces_feature %>%
+  mutate(
+    votechoice = case_when(
+      !is.na(pes21_votechoice2021) ~ as.character(pes21_votechoice2021),
+      !is.na(cps21_votechoice) ~ as.character(cps21_votechoice),
+      TRUE ~ NA_character_
+    ),
+    vote_source = case_when(
+      !is.na(pes21_votechoice2021) ~ "pes",
+      !is.na(cps21_votechoice) ~ "cps",
+      TRUE ~ NA_character_
+    )
+  )
+
+unique(ces_feature$votechoice)
+```
+We identified there were issues with inconsistent formatting in the data (such as inconsistent capitalization and spacing). For example, there were variations like "Don't know/ Prefer not to answer" and "Don't know / Prefer not to answer". 
+
+To ensure consistent formatting, we converted all variations of text to a consistent format, and replaced any inconsistent spaces and symbols 
+
+```{r}
+# Standardizing Formatting
+ces_feature$votechoice <- recode(ces_feature$votechoice, 
+                                  "ndp" = "NDP",
+                                  "Don't know/ Prefer not to answer" = "Don't know / Prefer not to answer",
+                                  "Another party (please specify)" = "Another party (specify)",
+                                  .default = ces_feature$votechoice) 
+
+#ces_feature$votechoice <- factor(ces_feature$votechoice)
+table(ces_feature$votechoice, useNA = "ifany")
+```
+#### Handling "Another party (specify)" Responses
+
+In the raw dataset, vote choices were coded into predefined categories (e.g., Liberal, Conservative, NDP, etc.).  
+However, some respondents selected **"Another party (specify)"**, which allowed them to write in a custom party name.  
+
+Upon inspection, we found **275** such responses, stored in the free-text fields:
+- `pes21_votechoice2021_7_TEXT` (post-election survey)
+- `cps21_votechoice_6_TEXT` (pre-election survey)
+
+These responses were initially assigned the label `"Another party"`, making them uninformative for modeling.
+
+While small in number, these write-in responses contain meaningful data:
+- Some match known parties like **People’s Party**, **Bloc Québécois**, or **Green Party**
+- Others reflect **independent candidates** or **small/obscure parties**
+- A portion includes **spoiled ballots**, **protest votes**, or **intentional ambiguity** (e.g., "None of your business")
+
+Without processing, they would either be dropped (as NA) or lumped into a generic "Other" class.
+```{r}
+map_another_to_main_parties <- function(text) {
+  text <- tolower(trimws(text))
+
+  case_when(
+    # Spoiled or protest vote
+    grepl("spoil|annul|cancel|decline|private|blank|secret ballot|none of your business|don't vote", text) ~ "I spoiled my vote",
+
+    # People's Party
+    grepl("ppc|people.?s party|parti populaire|popular party", text) ~ "People's Party",
+
+    # Bloc Québécois
+    grepl("bloc", text) ~ "Bloc Québécois",
+
+    # Green Party
+    grepl("green", text) |
+      grepl("protection des animaux|animal protection", text) ~ "Green Party",
+
+    # Liberal
+    grepl("liberal", text) ~ "Liberal Party",
+
+    # Conservative
+    grepl("conservative|pcc|pcp|cpp", text) ~ "Conservative Party",
+
+    # NDP
+    grepl("ndp|new democratic|npd", text) ~ "NDP",
+
+    # Independent, Maverick, Communist, etc.
+    grepl("independent|maverick|rhinoceros|communist|libertarian|parti libre|christian heritage|chp", text) ~ "Another party",
+
+    # Uncertain or undecided
+    grepl("undecid|indécis|i don't know|incertain|not sure|je vais probablement", text) ~ "Don't know / Prefer not to answer",
+
+    # Anything else
+    TRUE ~ "Another party"
+  )
+}
+```
+
+To recover this information, we implemented a custom mapping function to classify free-text responses into 9 categories:
+
+1. Liberal Party  
+2. Conservative Party  
+3. NDP  
+4. Green Party  
+5. Bloc Québécois  
+6. People’s Party  
+7. Another party (small or independent parties)  
+8. Spoiled / Protest vote  
+9. Don't know / Prefer not to answer
+
+This mapping was applied **after** merging vote choices from both surveys and **after** standardizing vote labels.
+
+```{r}
+# Merged another party choice
+ces_feature <- ces_feature %>%
+  mutate(
+    another_text = case_when(
+      votechoice == "Another party (specify)" & vote_source == "pes" ~ pes21_votechoice2021_7_TEXT,
+      votechoice == "Another party (specify)" & vote_source == "cps" ~ cps21_votechoice_6_TEXT,
+      TRUE ~ NA_character_
+    )
+  )
+
+# replace votechoice
+ces_feature <- ces_feature %>%
+  mutate(
+    votechoice = if_else(
+      votechoice == "Another party (specify)" ,
+      map_another_to_main_parties(another_text),
+      votechoice
+    )
+  )
+table(ces_feature$votechoice, useNA = "ifany")
+
+ces_feature <- ces_feature %>%
+  filter(votechoice != "Another party")
+
+
+#unmapped_rows <- ces_feature %>%   filter(votechoice == "Another party")
+#unique(unmapped_rows$another_text)
+```
+
+After applying the mapping, some records originally labeled as "Another party" were reclassified into more specific categories (e.g., Green Party, People’s Party, etc.). The remaining "Another party" cases were too few in number and too heterogeneous in content to be analytically meaningful, so they were excluded from the modeling.
+
+### Data Cleaning - Check feature variables
+
+Before modeling, we examine the distribution and potential correlations of these features to decide whether they should be included in the model.
+
+Here is the code used to inspect the unique data entries for each selected feature.
+By reviewing these values, we can identify issues like missing data, inconsistent formatting,or unexpected categories — which indicates that data cleaning is needed before analysis.
+
+```{r}
+# return unique entry for each feature
+get_feature_levels <- function(data, column_name) {
+  if (!column_name %in% names(data)) {
+    stop("Column not found in dataset.")
+  }
+  unique_values <- unique(data[[column_name]])
+  return(unique_values)
+}
+
+for (var in feature_vars) {
+  # Skip only "Duration__in_seconds_"
+  if (var == "Duration__in_seconds_") next
+  
+  cat("\n---", var, "---\n")
+  print(get_feature_levels(ces_feature, var))
+}
+```
+We are beginning with handling ambiguous responses such as NA and "don't know". In parallel, we aim to identify patterns of political apathy, which may be reflected through missing values, neutral responses, or lack of engagement.
+
+```{r}
+replace_dontknow_with_na <- function(col) {
+  if (is.character(col) || is.factor(col)) {
+    col <- as.character(col)
+    col[grepl("don.?t\\s*know|prefer not to answer", col, ignore.case = TRUE)] <- NA
+    return(as.factor(col))
+  } else {
+    return(col)
+  }
+}
+
+# Apply the function to all feature columns
+ces_feature <- ces_feature %>%
+  mutate(across(all_of(feature_vars), replace_dontknow_with_na))
+```
+
+### Handling disengaged data
+
+In this step, we identify and remove politically disengaged respondents and those with unclear or missing vote intentions. 
+
+```{r}
+# Since We define respondents with disengaged_count >= 3 as politically disengaged
+# Separate disengaged respondents based on disengaged_threshold
+
+disengaged_responses <- ces_feature %>%
+  filter(disengaged_count >= disengaged_threshold)
+
+ces_feature_cleaned <- ces_feature %>%
+  filter(disengaged_count < disengaged_threshold)
+
+# Filter respondents with invalid vote choices (e.g., "Don't know" or "Spoiled vote")
+invalid_vote_choices <- c("Don't know / Prefer not to answer", "I spoiled my vote")
+invalid_vote_responses <- ces_feature_cleaned %>%
+  filter(is.na(votechoice) | votechoice %in% invalid_vote_choices)
+
+ces_feature_cleaned <- ces_feature_cleaned %>%
+  filter(!(is.na(votechoice) | votechoice %in% invalid_vote_choices))
+
+# Combine all disengaged rows
+disengaged_group <- bind_rows(disengaged_responses, invalid_vote_responses)
+```
+
+```{r}
+ces_feature_cleaned$votechoice <- factor(ces_feature_cleaned$votechoice)
+disengaged_group$votechoice <- factor(disengaged_group$votechoice)
+```
+
+Initially, votechoice was converted to a character type, which led to issues when inspecting the data later. The values in the column became numeric codes instead of the intended text labels (e.g., "1" for "Liberal Party"). This happened because when a factor column is converted to a character type, the factor levels are lost and replaced by numeric codes.
+
+Since we plan to use votechoice as the target variable in predictive modeling, it is essential to revert it back to factor type. This is because many machine learning algorithms (e.g., logistic regression, random forest) require categorical variables to be factors, as they help the model interpret the categories correctly.
+
+### Handling low-quality data
+
+Based on survey duration time, we identified some responses as unreliable.
+These cases are also labeled as politically disengaged.
+Since they may bias the model, we temporarily remove them from the dataset before modeling.
+
+```{r}
+library(ggplot2)
+ggplot(ces_feature_cleaned, aes(x = Duration__in_seconds_)) +
+  geom_histogram(binwidth = 10) +
+  xlim(0, 2400) +  
+  labs(title = "Distribution of Survey Duration",
+       x = "Duration (seconds)", y = "Count")
+
+summary(ces_feature$Duration__in_seconds_)
+```
+The summary statistics of the `Duration` variable are as follows:
+
+- **Minimum**: 362 seconds (~6 minutes)  
+- **1st Quartile (Q1)**: 995 seconds (~16.6 minutes)  
+- **Median**: 1325 seconds (~22 minutes)  
+- **Mean**: 8710 seconds (significantly inflated by outliers)  
+- **3rd Quartile (Q3)**: 1875 seconds (~31.3 minutes)  
+- **Maximum**: 1,575,155 seconds (> 400 hours)
+
+According to the summary, These values suggest that while most respondents completed the survey in under 30 minutes, there are a few extreme outliers with excessively long durations that strongly distort the mean.
+
+The **minimum value of 362 seconds** and the **Q1 value of 995 seconds** suggest that any respondent completing the survey in under 10 minutes may not have engaged meaningfully with the content. Similarly, values above 48 hour are highly suspicious and may indicate participants who were inactive for long periods.
+
+Therefore, a threshold of **600 seconds (10 minutes)** was chosen to identify "too fast" respondents, while an upper cap of **172800 seconds (48 hour)** was applied to identify "too slow" responses.
+
+```{r}
+filter_by_duration <- function(data, duration_col = "Duration__in_seconds_", 
+                               fast_threshold = 600, slow_threshold = 172800) {
+  data %>%
+    filter(
+      .data[[duration_col]] >= fast_threshold,
+      .data[[duration_col]] <= slow_threshold
+    )
+}
+
+ces_feature_cleaned <- filter_by_duration(ces_feature_cleaned)
+```
+
+Then Remove responses considered low quality:
+We exclude any row where 'low_quality_count' is greater than low_quality_threshold
+This helps reduce noise from unreliable responses (e.g., inconsistent answers or other quality issues).
+
+```{r}
+ces_feature_cleaned <- ces_feature_cleaned %>% filter(low_quality_count <= low_quality_threshold)
+```
+
+
+### Pre-step for Correlation Test
+
+Since these features are of different types and most of them are non-numeric. We cannot apply a single, unified statistical method. 
+Instead, we need to adopt different analysis strategies based on the nature of each variable.
+
+Next, we divide the selected features into two groups based on their data types:
+- Categorical features will be tested using Cramér's V
+- Ordinal or continuous features will be tested using the Kruskal-Wallis test
+This helps us evaluate the strength of correlation between each feature and the target variable.
+
+```{r}
+# Initialize lists for variable classification
+list_chi <- c()
+list_kruskal <- c()
+
+# Target variable (e.g. party vote choice)
+#target_var<-"votechoice"
+#target_var<-"pes21_votechoice2021"
+#target <- ces_feature_cleaned[[target_var]]
+
+
+# Target variable (e.g. party vote choice)
+target_var <- "votechoice"
+target <- ces_feature_cleaned[[target_var]]
+#target <- ces_feature_cleaned[["votechoice"]]
+is_target_cat <- is.factor(target) || is.character(target)
+
+# Loop through feature variables
+if (is_target_cat) {
+  for (var in feature_vars) {
+    x <- ces_feature_cleaned[[var]]
+    
+    if (is.factor(x) || is.character(x)) {
+      list_chi <- c(list_chi, var)
+    } else if (is.numeric(x) || is.ordered(x)) {
+      list_kruskal <- c(list_kruskal, var)
+    }
+  }
+}
+
+# Print results
+cat("Variables for Cramér's V (categorical):\n")
+print(list_chi)
+
+cat("\nVariables for Kruskal-Wallis (numeric or ordered):\n")
+print(list_kruskal)
+```
+
+### Correlation Test
+
+For the features in list_chi, we compute their correlation with the target variable (party vote choice) using Cramér's V. The calculation uses the cramerV() function from the rcompanion package, which automatically removes observations with missing values (NA).
+
+
+```{r}
+library(rcompanion)  # cramerV
+cramer_results <- data.frame(Variable = character(),
+                             CramersV = numeric(),
+                             stringsAsFactors = FALSE)
+
+for (var in list_chi) {
+  tbl <- table(ces_feature_cleaned[[target_var]], ces_feature_cleaned[[var]])
+  if (min(dim(tbl)) > 1) {
+    result <- cramerV(tbl, bias.correct = TRUE)
+    cramer_results <- rbind(cramer_results, data.frame(Variable = var, CramersV = result))
+  }
+}
+
+# print result
+cramer_results <- cramer_results[order(-cramer_results$CramersV), ]
+print(cramer_results, row.names = FALSE)
+
+```
+
+Higher Cramér's V values indicate stronger associations with the target variable.
+Variables such as Region and Province showed relatively strong correlations with vote choice, while others like Volunteer activity and Immigration year had weaker or missing correlations.
+
+During the Cramér's V analysis, we found that 'cps21_imm_year' returned NaN. It might because the 'cps21_imm_year' variable has many unique values (immigration years).
+To address this, we converted 'cps21_imm_year' into 'years since immigration' by subtracting it from 2021.
+This transformed variable is numeric and can be meaningfully analyzed using the Kruskal–Wallis test.
+
+```{r}
+# convert new variable
+ces_feature_cleaned$imm_duration <- 2021 - as.numeric(ces_feature_cleaned$cps21_imm_year)
+
+# add to list_kruskal
+list_kruskal <- c(list_kruskal, "imm_duration")
+```
+
+
+Then we applied the Kruskal–Wallis test to evaluate whether the distributions of features in list_kruskal differ significantly across vote choice categories.
+
+```{r}
+kruskal_results <- data.frame(Variable = character(),
+                              KruskalP = numeric(),
+                              stringsAsFactors = FALSE)
+
+for (var in list_kruskal) {
+  df <- na.omit(ces_feature_cleaned[, c(var, target_var)])
+  formula <- as.formula(paste(var, "~", target_var))
+  result <- kruskal.test(formula, data = df)
+  
+  kruskal_results <- rbind(kruskal_results,
+                           data.frame(Variable = var,
+                                      KruskalP = result$p.value))
+}
+
+# print result
+kruskal_results <- kruskal_results[order(kruskal_results$KruskalP), ]
+print(kruskal_results)
+
+```
+
+Since small p-values indicate strong evidence of differences between groups.
+The features 'cps21_age', 'Duration__in_seconds_', and 'imm_duration' all represented that these features are highly associated with voting behavior and may be valuable for predictive modeling.
+
+We will use the following features in the prediction model:
+```{r}
+# filter variables with Cramér's V > 0.1
+selected_cramer_vars <- cramer_results %>%
+  filter(CramersV > 0.1) %>%
+  pull(Variable)
+
+# filter variables with kruskal < 0.05
+selected_kruskal_vars <- kruskal_results %>%
+  filter(KruskalP < 0.05) %>%
+  pull(Variable)
+
+selected_model_vars <- unique(c(selected_cramer_vars, selected_kruskal_vars))
+print(selected_model_vars)
+```
+
+### Checking Feature Redundancy
+
+To prevent multicollinearity in the model, we calculated pairwise Cramér’s V scores among features to identify strongly correlated variables.
+
+Interpretation thresholds:
+• V > 0.6 — High correlation: likely redundant; consider removing one of the variables.
+• V > 0.4 — Moderate correlation: possible redundancy; proceed with caution.
+• V < 0.3 — Low correlation: safe to include both variables.
+
+
+```{r}
+library(rcompanion)
+
+feature_corr_results <- data.frame(VarA = character(),
+                                   VarB = character(),
+                                   CramersV = numeric(),
+                                   stringsAsFactors = FALSE)
+
+for (i in 1:(length(selected_cramer_vars)-1)) {
+  for (j in (i+1):length(selected_cramer_vars)) {
+    varA <- selected_cramer_vars[i]
+    varB <- selected_cramer_vars[j]
+
+    clean_data <- ces_feature_cleaned %>%
+      dplyr::select(all_of(c(varA, varB))) %>%
+      dplyr::filter(!is.na(.data[[varA]]), !is.na(.data[[varB]]))
+
+    tbl <- table(clean_data[[varA]], clean_data[[varB]])
+
+    if (min(dim(tbl)) > 1) {
+      result <- cramerV(tbl, bias.correct = TRUE)
+      feature_corr_results <- rbind(feature_corr_results,
+                                    data.frame(VarA = varA, VarB = varB, CramersV = result))
+    }
+  }
+}
+
+# print out
+feature_corr_results <- feature_corr_results %>%
+  mutate(Explanation = case_when(
+    CramersV > 0.6 ~ "High correlation – consider removing one variable",
+    CramersV > 0.4 ~ "Moderate correlation – possible redundancy",
+    TRUE ~ "Low correlation – likely safe to include both"
+  ))
+
+feature_corr_results <- feature_corr_results[order(-feature_corr_results$CramersV), ]
+print(feature_corr_results)
+```
+
+
+Among all feature pairs, only `Region` and `pes21_province` showed a high Cramér’s V (0.9997), indicating near-perfect redundancy. Since both represent geographic information.
+We will retain only one of them to avoid duplication. In this case, we choose to keep `pes21_province`.
+
+### Result
+
+Update the list of features in the prediction model:
+```{r}
+selected_cramer_vars <- setdiff(selected_cramer_vars, "Region")
+selected_model_vars <- unique(c(selected_cramer_vars, selected_kruskal_vars))
+print(selected_model_vars)
+```
+
+### Export Data for Modeling
+
+```{r}
+ces_Modeling <- ces_feature_cleaned %>% select(all_of(selected_model_vars), target_var)
+save(ces_Modeling, disengaged_group, selected_model_vars, file = "preprocessed_data.RData")
+```
+
