@@ -169,4 +169,165 @@ library(caret)
 confusionMatrix(pred_labels, test_data$votechoice)
 
 ```
+```{r}
+importance_matrix <- xgb.importance(
+  feature_names = colnames(train_matrix),
+  model = xg_model
+)
+print(importance_matrix)
+```
+
+### Adjust XGBoost parameters
+
+```{r}
+params_2 <- list(
+  objective        = "multi:softprob",  # multi:softprob 可以输出各类别概率
+  num_class        = n_class,          # 类别数
+  eval_metric      = "mlogloss",       # 多分类对数损失
+  eta              = 0.05,              # 学习率
+  max_depth        = 6,                # 树最大深度
+  min_child_weight = 1,                # 叶子节点最小样本权重
+  subsample        = 0.7,              # 样本采样比例
+  colsample_bytree = 0.7,              # 特征采样比例
+  gamma            = 0                 # 分裂所需最小损失减少
+)
+
+# 训练
+xg_model_2 <- xgb.train(
+  params    = params_2,
+  data      = dtrain,
+  nrounds   = 100,
+  verbose   = 0
+)
+
+# 输出概率
+pred_prob_2 <- predict(xg_model_2, newdata = dtest)
+# 将概率矩阵转换为类别索引
+pred_mat_2  <- matrix(pred_prob_2, ncol = n_class, byrow = TRUE)
+pred_idx_2  <- max.col(pred_mat_2) - 1
+# 转回原始标签
+pred_labels_2 <- factor(pred_idx_2, levels = 0:(n_class-1), labels = levels(train_data$votechoice))
+
+# 评估
+library(caret)
+confusionMatrix(pred_labels_2, test_data$votechoice)
+```
+
+
+
+```{r}
+params_3 <- list(
+  objective        = "multi:softprob",  # multi:softprob 可以输出各类别概率
+  num_class        = n_class,          # 类别数
+  eval_metric      = "mlogloss",       # 多分类对数损失
+  eta              = 0.05,              # 学习率
+  max_depth        = 4,                # 树最大深度
+  min_child_weight = 1,                # 叶子节点最小样本权重
+  subsample        = 0.7,              # 样本采样比例
+  colsample_bytree = 0.7,              # 特征采样比例
+  gamma            = 0                 # 分裂所需最小损失减少
+)
+
+# 训练
+xg_model_3 <- xgb.train(
+  params    = params_3,
+  data      = dtrain,
+  nrounds   = 100,
+  verbose   = 0
+)
+
+# 输出概率
+pred_prob_3 <- predict(xg_model_3, newdata = dtest)
+# 将概率矩阵转换为类别索引
+pred_mat_3  <- matrix(pred_prob_3, ncol = n_class, byrow = TRUE)
+pred_idx_3  <- max.col(pred_mat_3) - 1
+# 转回原始标签
+pred_labels_3 <- factor(pred_idx_3, levels = 0:(n_class-1), labels = levels(train_data$votechoice))
+
+pred_labels_3 <- factor(
+  pred_idx_3,
+  levels = 0:(length(party_levels) - 1),
+  labels = party_levels
+)
+
+# 评估
+library(caret)
+confusionMatrix(pred_labels_3, test_data$votechoice)
+```
+
+```{r}
+# 使用 params_3 作为示例
+params_cv <- list(
+  objective        = "multi:softprob",
+  num_class        = n_class,
+  eval_metric      = "mlogloss",
+  eta              = 0.05,
+  max_depth        = 4,
+  min_child_weight = 1,
+  subsample        = 0.7,
+  colsample_bytree = 0.7,
+  gamma            = 0
+)
+
+set.seed(42)
+cv_result <- xgb.cv(
+  params = params_cv,
+  data = dtrain,
+  nrounds = 1000,                 # 给一个较大的上限
+  nfold = 5,                      # 5折交叉验证
+  early_stopping_rounds = 50,     # 50轮没有提升就停止
+  verbose = 1
+)
+
+best_nrounds <- cv_result$best_iteration
+cat("Best nrounds:", best_nrounds, "\n")
+
+# 使用最佳轮数重新训练最终模型
+xg_model_cv <- xgb.train(
+  params = params_cv,
+  data = dtrain,
+  nrounds = best_nrounds,
+  verbose = 0
+)
+```
+```{r}
+library(caret)
+
+# 注意 xgboost 的 caret 方法叫 "xgbTree"
+ctrl <- trainControl(
+  method = "cv", 
+  number = 5, 
+  verboseIter = TRUE
+)
+
+tune_grid <- expand.grid(
+  nrounds = c(100, 200, 500),
+  max_depth = c(4, 6),
+  eta = c(0.05, 0.1),
+  gamma = c(0, 1),
+  colsample_bytree = c(0.7, 0.8),
+  min_child_weight = c(1, 3),
+  subsample = c(0.7, 0.8)
+)
+
+set.seed(42)
+xgb_tuned <- train(
+  x = train_matrix,
+  y = factor(train_label),  # caret 需要 factor 类型标签
+  method = "xgbTree",
+  trControl = ctrl,
+  tuneGrid = tune_grid,
+  metric = "Accuracy"
+)
+
+print(xgb_tuned$bestTune)
+
+```
+Aggregating results
+Selecting tuning parameters
+Fitting nrounds = 200, max_depth = 4, eta = 0.05, gamma = 0, colsample_bytree = 0.7, min_child_weight = 1, subsample = 0.7 on full training set
+
+```{r}
+
+```
 
