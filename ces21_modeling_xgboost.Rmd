@@ -1,6 +1,8 @@
 ---
 title: "Modeling - xgboost"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 ### Load Data
@@ -16,17 +18,16 @@ library(caret)
 
 #load("preprocessed_data.RData")
 load("scripts/preprocessed_data_2.RData")
+```
+### check new feature variable
 
-
-
+```{r include=FALSE}
 # Check the structure of the main data
 colnames(ces_Modeling)
 
 ces_Modeling <- ces_Modeling %>%
   select(-imm_duration, -cps21_rel_imp, -Duration__in_seconds_)
-```
 
-```{r}
 add_vars <- c("pes21_paymed", "pes21_senate", "pes21_losetouch", "pes21_hatespeech", 
               "pes21_envirojob", "pes21_govtcare", "pes21_famvalues", "pes21_bilingualism",
               "pes21_equalrights","pes21_fitin","pes21_immigjobs","pes21_foreign", "pes21_emb_satif",
@@ -36,12 +37,11 @@ feature_cols <- names(ces_Modeling)
 duplicated_cols <- intersect(add_vars, feature_cols)
 duplicated_cols
 
-# 重复数量
 length(add_vars)
 length(duplicated_cols)
 ```
 
-```{r}
+```{r include=FALSE}
 na_counts <- sapply(ces_Modeling, function(x) sum(is.na(x)))
 high_na_cols <- names(na_counts[na_counts > 4000])
 na_counts[high_na_cols]
@@ -50,10 +50,8 @@ na_counts[high_na_cols]
 duplicated_cols <- intersect(add_vars, high_na_cols)
 duplicated_cols
 
-# 重复数量
 length(duplicated_cols)
 ```
-
 ```{r}
 modeling_var_clean <- ces_Modeling %>%
   select(-all_of(high_na_cols))
@@ -63,7 +61,7 @@ modeling_var_clean <- ces_Modeling %>%
 # modeling_var_clean <- modeling_var_clean %>% na.omit()
 summary(modeling_var_clean)
 ```
-
+### Split Data
 
 ```{r}
 set.seed(123)
@@ -73,191 +71,113 @@ test_data <- modeling_var_clean[-train_index, ]
 ```
 
 
-### XGBoost
+### XGBoost - Data Preparation
 
 ```{r}
-library(xgboost)
+# Convert factor columns to numeric (using your original approach)
+train_data_numeric <- train_data %>% mutate_if(is.factor, as.numeric)
+test_data_numeric  <- test_data %>% mutate_if(is.factor, as.numeric)
 
-# 将所有因子列转换为数值型
-train_data_numeric <- train_data %>%
-  mutate_if(is.factor, as.numeric)
-test_data_numeric <- test_data %>%
-  mutate_if(is.factor, as.numeric)
+# Define feature columns (exclude 'votechoice')
+features <- setdiff(names(train_data_numeric), "votechoice")
 
-# 检查转换结果
-str(train_data_numeric)
-```
+# Create feature matrices for train and test
+train_matrix <- as.matrix(train_data_numeric[, features])
+test_matrix  <- as.matrix(test_data_numeric[, features])
 
+# Create labels
+train_label <- as.numeric(train_data_numeric$votechoice) - 1
+test_label  <- as.numeric(test_data_numeric$votechoice) - 1
 
-```{r}
-# 统计每个类别的样本数
+# Compute sample weights
 class_counts <- table(train_data_numeric$votechoice)
-# 总样本数
-total_count <- sum(class_counts)
-# 类别数
-n_class <- length(class_counts)
+total_count  <- sum(class_counts)
+n_class      <- length(class_counts)
 
-# 为每个类别计算权重： total / (n_class * freq)
-# 这样所有类别加起来的总权重大约等于总样本数
+# Class weight = total / (num_classes * class_frequency)
 class_weights_map <- total_count / (n_class * class_counts)
-# 查看各类别对应的权重
+sample_weights <- class_weights_map[ as.character(train_data_numeric$votechoice) ]
+
 class_weights_map
 
+# Build XGBoost DMatrix
+dtrain <- xgb.DMatrix(data = train_matrix, label = train_label, weight = sample_weights)
+dtest  <- xgb.DMatrix(data = test_matrix,  label = test_label)
 ```
 
-
+### XGBoost - Training
 
 ```{r}
-# 创建一个与 train_data_numeric 行数相同的权重向量
-sample_weights <- class_weights_map[ as.character(train_data_numeric$votechoice) ]
-# 查看前几行，确保权重对应正确
-head(sample_weights)
-
-```
-```{r}
-# 特征矩阵（去掉 votechoice 列）
-train_matrix <- as.matrix(train_data_numeric[, setdiff(names(train_data_numeric), "votechoice")])
-# 标签（0-indexed）
-train_label <- as.numeric(train_data_numeric$votechoice) - 1
-
-# 带样本权重的 DMatrix
-dtrain <- xgb.DMatrix(
-  data   = train_matrix,
-  label  = train_label,
-  weight = sample_weights
-)
-
-params <- list(
-  objective        = "multi:softprob",  # multi:softprob 可以输出各类别概率
-  num_class        = n_class,          # 类别数
-  eval_metric      = "mlogloss",       # 多分类对数损失
-  eta              = 0.1,              # 学习率
-  max_depth        = 6,                # 树最大深度
-  min_child_weight = 1,                # 叶子节点最小样本权重
-  subsample        = 0.8,              # 样本采样比例
-  colsample_bytree = 0.8,              # 特征采样比例
-  gamma            = 0                 # 分裂所需最小损失减少
-)
-
-# 训练
-xg_model <- xgb.train(
-  params    = params,
-  data      = dtrain,
-  nrounds   = 100,
-  verbose   = 0
-)
-
+train_and_evaluate <- function(params, dtrain, dtest, nrounds = 100) {
+  # Train model
+  model <- xgb.train(
+    params  = params,
+    data    = dtrain,
+    nrounds = nrounds,
+    verbose = 0
+  )
+  
+  # Predict probabilities
+  pred_prob <- predict(model, newdata = dtest)
+  
+  # Convert to matrix and get class with max probability
+  pred_mat  <- matrix(pred_prob, ncol = n_class, byrow = TRUE)
+  pred_idx  <- max.col(pred_mat) - 1
+  
+  # Convert back to factor labels
+  pred_labels <- factor(pred_idx, levels = 0:(n_class-1), labels = levels(train_data$votechoice))
+  
+  # Generate confusion matrix
+  cm <- confusionMatrix(pred_labels, test_data$votechoice)
+  
+  return(list(model = model, pred = pred_labels, cm = cm))
+}
 ```
 
 ```{r}
-# 构造测试集 DMatrix（不需要 weight）
-dtest <- xgb.DMatrix(
-  data  = as.matrix(test_data_numeric[, setdiff(names(test_data_numeric), "votechoice")]),
-  label = as.numeric(test_data_numeric$votechoice) - 1
+params_1 <- list(
+  objective        = "multi:softprob",  # Multi-class probability output
+  num_class        = n_class,
+  eval_metric      = "mlogloss",        # Multi-class log loss
+  eta              = 0.1,               # Learning rate
+  max_depth        = 6,                 # Max tree depth
+  min_child_weight = 1,                 # Min child weight
+  subsample        = 0.8,               # Subsample ratio
+  colsample_bytree = 0.8,               # Column sample by tree
+  gamma            = 0                  # Min loss reduction for split
 )
-
-# 输出概率
-pred_prob <- predict(xg_model, newdata = dtest)
-# 将概率矩阵转换为类别索引
-pred_mat  <- matrix(pred_prob, ncol = n_class, byrow = TRUE)
-pred_idx  <- max.col(pred_mat) - 1
-# 转回原始标签
-pred_labels <- factor(pred_idx, levels = 0:(n_class-1), labels = levels(train_data$votechoice))
-
-# 评估
-library(caret)
-confusionMatrix(pred_labels, test_data$votechoice)
-
+pred_1 <- train_and_evaluate(params_1, dtrain, dtest, nrounds = 100)
+pred_1$cm
 ```
+
+
 ```{r}
 importance_matrix <- xgb.importance(
   feature_names = colnames(train_matrix),
-  model = xg_model
+  model = pred_1$model
 )
 print(importance_matrix)
+xgb.plot.importance(importance_matrix[1:20,])
 ```
 
 ### Adjust XGBoost parameters
 
 ```{r}
 params_2 <- list(
-  objective        = "multi:softprob",  # multi:softprob 可以输出各类别概率
-  num_class        = n_class,          # 类别数
-  eval_metric      = "mlogloss",       # 多分类对数损失
-  eta              = 0.05,              # 学习率
-  max_depth        = 6,                # 树最大深度
-  min_child_weight = 1,                # 叶子节点最小样本权重
-  subsample        = 0.7,              # 样本采样比例
-  colsample_bytree = 0.7,              # 特征采样比例
-  gamma            = 0                 # 分裂所需最小损失减少
+  objective        = "multi:softprob",
+  num_class        = n_class,
+  eval_metric      = "mlogloss",
+  eta              = 0.05,
+  max_depth        = 6,
+  min_child_weight = 1,
+  subsample        = 0.7,
+  colsample_bytree = 0.7,
+  gamma            = 0
 )
+pred_2 <- train_and_evaluate(params_2, dtrain, dtest, nrounds = 100)
+pred_2$cm
 
-# 训练
-xg_model_2 <- xgb.train(
-  params    = params_2,
-  data      = dtrain,
-  nrounds   = 100,
-  verbose   = 0
-)
-
-# 输出概率
-pred_prob_2 <- predict(xg_model_2, newdata = dtest)
-# 将概率矩阵转换为类别索引
-pred_mat_2  <- matrix(pred_prob_2, ncol = n_class, byrow = TRUE)
-pred_idx_2  <- max.col(pred_mat_2) - 1
-# 转回原始标签
-pred_labels_2 <- factor(pred_idx_2, levels = 0:(n_class-1), labels = levels(train_data$votechoice))
-
-# 评估
-library(caret)
-confusionMatrix(pred_labels_2, test_data$votechoice)
-```
-
-
-
-```{r}
 params_3 <- list(
-  objective        = "multi:softprob",  # multi:softprob 可以输出各类别概率
-  num_class        = n_class,          # 类别数
-  eval_metric      = "mlogloss",       # 多分类对数损失
-  eta              = 0.05,              # 学习率
-  max_depth        = 4,                # 树最大深度
-  min_child_weight = 1,                # 叶子节点最小样本权重
-  subsample        = 0.7,              # 样本采样比例
-  colsample_bytree = 0.7,              # 特征采样比例
-  gamma            = 0                 # 分裂所需最小损失减少
-)
-
-# 训练
-xg_model_3 <- xgb.train(
-  params    = params_3,
-  data      = dtrain,
-  nrounds   = 100,
-  verbose   = 0
-)
-
-# 输出概率
-pred_prob_3 <- predict(xg_model_3, newdata = dtest)
-# 将概率矩阵转换为类别索引
-pred_mat_3  <- matrix(pred_prob_3, ncol = n_class, byrow = TRUE)
-pred_idx_3  <- max.col(pred_mat_3) - 1
-# 转回原始标签
-pred_labels_3 <- factor(pred_idx_3, levels = 0:(n_class-1), labels = levels(train_data$votechoice))
-
-pred_labels_3 <- factor(
-  pred_idx_3,
-  levels = 0:(length(party_levels) - 1),
-  labels = party_levels
-)
-
-# 评估
-library(caret)
-confusionMatrix(pred_labels_3, test_data$votechoice)
-```
-
-```{r}
-# 使用 params_3 作为示例
-params_cv <- list(
   objective        = "multi:softprob",
   num_class        = n_class,
   eval_metric      = "mlogloss",
@@ -268,32 +188,15 @@ params_cv <- list(
   colsample_bytree = 0.7,
   gamma            = 0
 )
+pred_3 <- train_and_evaluate(params_3, dtrain, dtest, nrounds = 100)
+pred_3$cm
 
-set.seed(42)
-cv_result <- xgb.cv(
-  params = params_cv,
-  data = dtrain,
-  nrounds = 1000,                 # 给一个较大的上限
-  nfold = 5,                      # 5折交叉验证
-  early_stopping_rounds = 50,     # 50轮没有提升就停止
-  verbose = 1
-)
-
-best_nrounds <- cv_result$best_iteration
-cat("Best nrounds:", best_nrounds, "\n")
-
-# 使用最佳轮数重新训练最终模型
-xg_model_cv <- xgb.train(
-  params = params_cv,
-  data = dtrain,
-  nrounds = best_nrounds,
-  verbose = 0
-)
 ```
-```{r}
-library(caret)
 
-# 注意 xgboost 的 caret 方法叫 "xgbTree"
+We performed automatic hyperparameter tuning using 5-fold cross-validation.
+The process included aggregating the cross-validation results and selecting the best set of parameters based on model performance.
+
+```{r eval=FALSE}
 ctrl <- trainControl(
   method = "cv", 
   number = 5, 
@@ -313,7 +216,7 @@ tune_grid <- expand.grid(
 set.seed(42)
 xgb_tuned <- train(
   x = train_matrix,
-  y = factor(train_label),  # caret 需要 factor 类型标签
+  y = factor(train_label), 
   method = "xgbTree",
   trControl = ctrl,
   tuneGrid = tune_grid,
@@ -323,11 +226,54 @@ xgb_tuned <- train(
 print(xgb_tuned$bestTune)
 
 ```
+
+The final output was:
+
+```
 Aggregating results
 Selecting tuning parameters
 Fitting nrounds = 200, max_depth = 4, eta = 0.05, gamma = 0, colsample_bytree = 0.7, min_child_weight = 1, subsample = 0.7 on full training set
+```
+
+
+```{r}
+params_4 <- list(
+  objective        = "multi:softprob",
+  num_class        = n_class,
+  eval_metric      = "mlogloss",
+  eta              = 0.05,
+  max_depth        = 4,
+  min_child_weight = 1,
+  subsample        = 0.7,
+  colsample_bytree = 0.7,
+  gamma            = 0
+)
+pred_4 <- train_and_evaluate(params_4, dtrain, dtest, nrounds = 200)
+pred_4$cm
+```
 
 ```{r}
 
+params_5 <- params_4
+set.seed(42)
+cv_result <- xgb.cv(
+  params                = params_5,
+  data                  = dtrain,
+  nrounds               = 500,                
+  nfold                 = 5,
+  early_stopping_rounds = 50,
+  verbose               = 1,
+  stratified            = TRUE,               
+  showsd                = TRUE,
+  metrics               = "mlogloss"
+)
+
+best_nrounds <- cv_result$best_iteration
+cat("Best nrounds from CV:", best_nrounds, "\n")
+
+
+pred_5 <- train_and_evaluate(params_5, dtrain, dtest, nrounds = best_nrounds)
+pred_5$cm
 ```
+
 
