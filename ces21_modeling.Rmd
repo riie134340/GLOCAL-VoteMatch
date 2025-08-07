@@ -3,10 +3,6 @@ title: "VoteMatch - Modeling"
 output:
   html_document:
     df_print: paged
-  html_notebook: default
-  pdf_document:
-    latex_engine: xelatex
-output_dir: output
 ---
 
 ### Load Data
@@ -15,170 +11,326 @@ We loaded the pre-processed data saved from the previous step.
 The initial dataset contained a total of 15,484 rows, with several variables related to voters' characteristics and political opinions.
 
 ```{r load-libs, message=FALSE}
+rm(list = ls())
 library(dplyr)
-library(nnet)
-library(randomForest)
-library(ggplot2)
-library(lattice)
+library(xgboost)
 library(caret)
-load("preprocessed_data.RData")
 
+#load("preprocessed_data.RData")
+load("scripts/preprocessed_data_2.RData")
+```
+
+```{r include=FALSE}
 # Check the structure of the main data
 colnames(ces_Modeling)
+
+ces_Modeling <- ces_Modeling %>%
+  select(-imm_duration, -cps21_rel_imp, -Duration__in_seconds_, -pes21_trust)
 ```
-```{r}
-#str(ces_Modeling)
-summary(ces_Modeling)
-```
-### Handling Missing Value
 
-*imm_duration*: This variable was removed due to significant missing data. It contained values resembling years of immigration, which and had a high proportion of missing values (over 13000).
+### Handling Missing Values
 
-*Duration__in_seconds_*: This variable was used for data quality checks and was not needed in the final model. It was removed to ensure the dataset was more focused on the relevant features for prediction.
-
-*cps21_rel_imp*: Although the exact reason for the variable's importance is unclear, it was removed because its NA values had a high occurrence and were second only to immduration in terms of missingness. Additionally, its missing data did not align well with other variables, and its inclusion was not deemed essential for the prediction task.
+We first remove columns with a high proportion of missing values (more than 4,000 missing entries out of ~15,000 rows). These columns are unlikely to contribute meaningfully to the model and may even introduce noise.
 
 ```{r}
-ces_Modeling_removed <- ces_Modeling %>%
-  select(-imm_duration, -cps21_rel_imp, -Duration__in_seconds_)
+na_counts <- sapply(ces_Modeling, function(x) sum(is.na(x)))
+high_na_cols <- names(na_counts[na_counts > 4000])
 
-# Remove rows with NA values in any of the features or target
-ces_Modeling_no_NA <- ces_Modeling_removed %>%
-  na.omit()
+modeling_var_clean <- ces_Modeling %>%
+  select(-all_of(high_na_cols))
+
+summary(modeling_var_clean)
 ```
-
-Rows with NA values in key variables were filtered out. After handling missing values and removing unnecessary variables, the data was reduced to approximately 11,000 rows.
+Since XGBoost natively supports missing values and handles them automatically during training and prediction. 
+It learns the optimal split direction for `NA`s during tree building, so there's no need for imputation or row deletion.
 
 ### Data Split
 
 The dataset was split into two groups:
 
-- *train_data*: Training set (70%), used to train the model.
-- *test_data*: Testing set (30%), used to evaluate the model's performance.
+- *train_data*: Training set (80%), used to train the model.
+- *test_data*: Testing set (20%), used to evaluate the model's performance.
 
 ```{r}
 set.seed(123)
-train_index <- sample(seq_len(nrow(ces_Modeling_no_NA)), size = 0.7 * nrow(ces_Modeling_no_NA))
-train_data <- ces_Modeling_no_NA[train_index, ]
-test_data <- ces_Modeling_no_NA[-train_index, ]
+train_index <- sample(seq_len(nrow(modeling_var_clean)), size = 0.8 * nrow(modeling_var_clean))
+train_data <- modeling_var_clean[train_index, ]
+test_data <- modeling_var_clean[-train_index, ]
 ```
 
 ### Model Selection
 
-This project aimed to predict party vote choice using two models:
+We experimented with several modeling approaches, including **logistic regression** and **random forest**, but found that both struggled to accurately predict smaller political parties such as the Green Party and the People's Party.
 
-- Multinomial Logistic Regression
-- Random Forest Classifier
+After these initial trials, we chose to use **XGBoost**, which provided several advantages:
 
-The models were trained on the dataset, with cross-validation used for performance evaluation, and subsequently tested on a separate test dataset.
+- Can handle **imbalanced data** well using class weights.
+- Supports **missing values** without needing imputation.
+- Performs well for **multi-class classification**.
 
-```{r}
-# Multinomial Logistic Regression
-log_model_1 <- multinom(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
-                        cps21_bornin_canada + cps21_marital + cps21_age,
-                        data = train_data, verbose = FALSE)
+With tuning and weighting, XGBoost gave more balanced results across all parties.
 
-# Random Forest
-rf_model_1 <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
-                        cps21_bornin_canada + cps21_marital + cps21_age,
-                        data = train_data)
-```
-
-### Evaluation of Model Performance
+### Data Preparation
 
 ```{r}
-# Use Multinomial Logistic Regression to predict
-log_predictions_1 <- predict(log_model_1, newdata = test_data)
+# Convert factor columns to numeric (using your original approach)
+train_data_numeric <- train_data %>% mutate_if(is.factor, as.numeric)
+test_data_numeric  <- test_data %>% mutate_if(is.factor, as.numeric)
 
-conf_matrix_log <- confusionMatrix(log_predictions_1, test_data$votechoice)
+# Define feature columns (exclude 'votechoice')
+features <- setdiff(names(train_data_numeric), "votechoice")
 
+# Create feature matrices for train and test
+train_matrix <- as.matrix(train_data_numeric[, features])
+test_matrix  <- as.matrix(test_data_numeric[, features])
 
-# Use Random Forest to predict
-rf_predictions_1 <- predict(rf_model_1, newdata = test_data)
+# Create labels
+train_label <- as.numeric(train_data_numeric$votechoice) - 1
+test_label  <- as.numeric(test_data_numeric$votechoice) - 1
 
-conf_matrix_rf <- confusionMatrix(rf_predictions_1, test_data$votechoice)
+# Compute sample weights
+class_counts <- table(train_data_numeric$votechoice)
+total_count  <- sum(class_counts)
+n_class      <- length(class_counts)
 
-# Print Result
-cat("\n---", "log_predictions_1", "---\n")
-print(conf_matrix_log)
-cat("\n---", "rf_predictions_1", "---\n")
-print(conf_matrix_rf)
+# Class weight = total / (num_classes * class_frequency)
+class_weights_map <- total_count / (n_class * class_counts)
+sample_weights <- class_weights_map[ as.character(train_data_numeric$votechoice) ]
+
+# Build XGBoost DMatrix
+dtrain <- xgb.DMatrix(data = train_matrix, label = train_label, weight = sample_weights)
+dtest  <- xgb.DMatrix(data = test_matrix,  label = test_label)
 ```
 
-The models faced difficulties in predicting smaller classes like Green Party, which had very few samples compared to larger classes like Liberal Party and Conservative Party.
+### XGBoost - Training
 
-Based on the confusion matrix and sensitivity values, it is clear that the model needs adjustments. Adjusting class weights is one potential solution to improve predictions for the minority classes.
+We trained the model using the `xgb.train()` function with a fixed number of boosting rounds.
+A helper function `train_and_evaluate()` was created to:
 
-### Model Adjustments
-
-```{r results = 'hide'}
-# Define class weights (assign higher weights to minority classes)
-class_weights <- c('Bloc Québécois' = 1, 
-                   'Conservative Party' = 1, 
-                   'Green Party' = 2,   # Higher weight for the minority class
-                   'Liberal Party' = 1, 
-                   'NDP' = 1, 
-                   'People\'s Party' = 2)  # Higher weight for the minority class
-
-# Train random forest model with class weights
-rf_model_2 <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 + 
-                         cps21_bornin_canada + cps21_marital + cps21_age, 
-                         data = train_data, 
-                         classwt = class_weights)
-
-
-# Define class weights for Multinomial Logistic Regression
-train_data_2<-train_data
-train_data_2$weights <- ifelse(train_data$votechoice == "Bloc Québécois", 1,
-                             ifelse(train_data$votechoice == "Conservative Party", 1,
-                                    ifelse(train_data$votechoice == "Green Party", 2,
-                                           ifelse(train_data$votechoice == "Liberal Party", 1,
-                                                  ifelse(train_data$votechoice == "NDP", 1, 
-                                                         2)))))
-
-# Train Multinomial Logistic Regression model with class weights
-log_model_2 <- train(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 + 
-                   cps21_bornin_canada + cps21_marital + cps21_age, 
-                   data = train_data_2,
-                   method = "multinom",  
-                   trControl = trainControl(method = "cv", number = 10, verboseIter = FALSE), 
-                   weights = train_data_2$weights)
-
-```
-
-### Evaluation of Adjusted Model Performance (Second Prediction)
+- Train the model
+- Predict class labels on the test set
+- Return a confusion matrix for evaluation
 
 ```{r}
-# Use Multinomial Logistic Regression to predict
-log_predictions_2 <- predict(log_model_2, newdata = test_data)
-
-conf_matrix_log <- confusionMatrix(log_predictions_2, test_data$votechoice)
-
-
-# Use Random Forest to predict
-rf_predictions_2 <- predict(rf_model_2, newdata = test_data)
-
-conf_matrix_rf <- confusionMatrix(rf_predictions_2, test_data$votechoice)
-
-# Print Result
-cat("\n---", "log_predictions_2", "---\n")
-print(conf_matrix_log)
-cat("\n---", "rf_predictions_2", "---\n")
-print(conf_matrix_rf)
+train_and_evaluate <- function(params, dtrain, dtest, nrounds) {
+  # Train model
+  model <- xgb.train(
+    params  = params,
+    data    = dtrain,
+    nrounds = nrounds,
+    verbose = 0
+  )
+  
+  # Predict probabilities
+  pred_prob <- predict(model, newdata = dtest)
+  
+  # Convert to matrix and get class with max probability
+  pred_mat  <- matrix(pred_prob, ncol = n_class, byrow = TRUE)
+  pred_idx  <- max.col(pred_mat) - 1
+  
+  # Convert back to factor labels
+  pred_labels <- factor(pred_idx, levels = 0:(n_class-1), labels = levels(train_data$votechoice))
+  
+  # Generate confusion matrix
+  cm <- confusionMatrix(pred_labels, test_data$votechoice)
+  
+  return(list(model = model, pred = pred_labels, cm = cm))
+}
 ```
 
-**Multinomial Logistic Regression**: 
+#### Comparing Models With and Without Class Weights
 
-Adjusting class weights led to an increase in performance for the Bloc Québécois and Conservative Party classes, but the Green Party and People's Party continue to be problematic with low sensitivity scores. There seems to be overfitting with the dominant classes, while the minority classes are still underrepresented.
+We first tested a model **without using class weights**. While the overall accuracy was higher (63.99%), the model completely failed to predict the Green Party (recall = 0.000) and had very low recall for the People's Party (0.087).
 
-**Random Forest**:
+After applying **class weights based on class frequencies**, the overall accuracy dropped to 56.68%, but the model achieved better balance:
+- Green Party recall improved to 14.8%
+- People's Party recall increased to 56.5%
 
-After adjusting the class weights, the accuracy dropped significantly from 64.32% to 52.48%. While the model's sensitivity for Bloc Québécois and Conservative Party improved, it failed to improve prediction performance for the minority classes, such as Green Party and People's Party, which continued to have low sensitivity values.
-
-The Green Party and People's Party remain underrepresented, which suggests that further improvements are needed for minority class predictions, indicating a need for further refinement or use of additional techniques (e.g., SMOTE).
-
+This confirmed that weighting was necessary to ensure fairer predictions across all parties, especially smaller ones.
 
 ```{r}
+dtrain_nw <- xgb.DMatrix(data = train_matrix, label = train_label)
 
+params_nw <- list(
+  objective        = "multi:softprob",  # Multi-class probability output
+  num_class        = n_class,
+  eval_metric      = "mlogloss",        # Multi-class log loss
+  eta              = 0.1,               # Learning rate
+  max_depth        = 6,                 # Max tree depth
+  min_child_weight = 1,                 # Min child weight
+  subsample        = 0.8,               # Subsample ratio
+  colsample_bytree = 0.8,               # Column sample by tree
+  gamma            = 0                  # Min loss reduction for split
+)
+pred_nw <- train_and_evaluate(params_nw, dtrain_nw, dtest, nrounds = 100)
+pred_nw$cm
+```
+```{r}
+params_1 <- list(
+  objective        = "multi:softprob",  # Multi-class probability output
+  num_class        = n_class,
+  eval_metric      = "mlogloss",        # Multi-class log loss
+  eta              = 0.1,               # Learning rate
+  max_depth        = 6,                 # Max tree depth
+  min_child_weight = 1,                 # Min child weight
+  subsample        = 0.8,               # Subsample ratio
+  colsample_bytree = 0.8,               # Column sample by tree
+  gamma            = 0                  # Min loss reduction for split
+)
+pred_1 <- train_and_evaluate(params_1, dtrain, dtest, nrounds = 100)
+pred_1$cm
 ```
 
+### XGBoost Hyperparameters Tuning
+
+To evaluate different hyperparameter tuning strategies, I applied two approaches:
+
+- Automated grid search using caret::train() with 5-fold cross-validation
+- Manual tuning using xgb.cv() with log-loss (mlogloss) as the evaluation metric
+
+#### Automatic Tuning with Accuracy
+
+The first approach used caret::train() with a custom parameter grid.
+The model was evaluated using 5-fold cross-validation, and the best-performing combination was selected based on validation accuracy.
+
+```{r xgb-tuning, cache=TRUE, message=FALSE}
+
+if (!file.exists("output/xgb_tuned_full_accuracy.rds")) {
+  
+  ctrl <- trainControl(
+    method = "cv", 
+    number = 5, 
+    verboseIter = TRUE
+    )
+  
+  tune_grid <- expand.grid(
+    nrounds = c(100, 200, 300),
+    max_depth = c(4, 6),
+    eta = c(0.05, 0.1),
+    gamma = c(0, 1),
+    colsample_bytree = c(0.7, 0.8),
+    min_child_weight = c(1, 3),
+    subsample = c(0.7, 0.8)
+  )
+  
+  set.seed(42)
+  xgb_tuned <- train(
+    x = train_matrix,
+    y = factor(train_label), 
+    method = "xgbTree",
+    trControl = ctrl,
+    tuneGrid = tune_grid,
+    metric = "accuracy"
+  )
+  
+  saveRDS(xgb_tuned, "output/xgb_tuned_full_accuracy.rds")
+}else {
+  xgb_tuned <- readRDS("output/xgb_tuned_full_accuracy.rds")
+}
+```
+
+```{r cache=TRUE}
+print(xgb_tuned$bestTune)
+```
+
+#### Tuning with Log-loss
+
+The built-in tuning tools (e.g., `caret::train()`) do not fully support multi-class `logloss` (`mlogloss`) as the evaluation metric.  
+To work around this, we implemented a **manual grid search** using `xgb.cv()`.
+
+```{r tuning, cache=TRUE}
+num_class <- length(unique(train_label))
+
+# Define the grid of hyperparameters to search
+tune_grid <- expand.grid(
+  max_depth = c(4, 6),
+  eta = c(0.05, 0.1),
+  gamma = c(0, 1),
+  colsample_bytree = c(0.7, 0.8),
+  min_child_weight = c(1, 3),
+  subsample = c(0.7, 0.8)
+)
+
+results <- list()
+iter <- 1
+
+for (i in 1:nrow(tune_grid)) {
+  # Set parameters for current grid
+  params <- list(
+    booster = "gbtree",
+    objective = "multi:softprob",
+    eval_metric = "mlogloss",
+    num_class = num_class,
+    max_depth = tune_grid$max_depth[i],
+    eta = tune_grid$eta[i],
+    gamma = tune_grid$gamma[i],
+    colsample_bytree = tune_grid$colsample_bytree[i],
+    min_child_weight = tune_grid$min_child_weight[i],
+    subsample = tune_grid$subsample[i]
+  )
+  
+  set.seed(42)
+  cv_model <- xgb.cv(
+    params = params,
+    data = dtrain,
+    nrounds = 500, # Max training rounds
+    nfold = 5,
+    early_stopping_rounds = 50,  # Stop early if no improvement in 50 round
+    verbose = 1
+  )
+  
+  best_iter <- cv_model$best_iteration
+  best_logloss <- cv_model$evaluation_log$test_mlogloss_mean[best_iter]
+  
+  results[[iter]] <- cbind(
+    tune_grid[i, ],
+    best_iteration = best_iter,
+    best_logloss = best_logloss
+  )
+  iter <- iter + 1
+}
+
+results_df <- do.call(rbind, results)
+results_df <- results_df[order(results_df$best_logloss), ]
+print(head(results_df, 10))
+```
+
+   max_depth  eta gamma colsample_bytree min_child_weight subsample best_iteration best_logloss
+21         4 0.05     1              0.7                3       0.7            185     1.191683
+5          4 0.05     1              0.7                1       0.7            186     1.191864
+17         4 0.05     0              0.7                3       0.7            185     1.192240
+39         4 0.10     1              0.7                1       0.8             91     1.192241
+37         4 0.05     1              0.7                1       0.8            180     1.192505
+61         4 0.05     1              0.8                3       0.8            175     1.192541
+35         4 0.10     0              0.7                1       0.8             91     1.192716
+1          4 0.05     0              0.7                1       0.7            185     1.192766
+49         4 0.05     0              0.7                3       0.8            168     1.192945
+19         4 0.10     0              0.7                3       0.7             88     1.192981
+
+```{r}
+params_6 <- list(
+  objective        = "multi:softprob",
+  num_class        = n_class,
+  eval_metric      = "mlogloss",
+  eta              = 0.05,
+  max_depth        = 4,
+  min_child_weight = 3,
+  subsample        = 0.7,
+  colsample_bytree = 0.7,
+  gamma            = 1
+)
+
+pred_6 <- train_and_evaluate(params_6, dtrain, dtest, nrounds = 164)
+pred_6$cm
+```
+
+
+
+```{r include=FALSE}
+importance_matrix <- xgb.importance(
+  feature_names = colnames(train_matrix),
+  model = pred_1$model
+)
+print(importance_matrix)
+xgb.plot.importance(importance_matrix[1:20,])
+```

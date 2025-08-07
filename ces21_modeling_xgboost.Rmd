@@ -356,7 +356,7 @@ results_df <- results_df[order(results_df$best_logloss), ]
 print(head(results_df, 10))
 
 ```
-
+7:3
 max_depth  eta gamma colsample_bytree min_child_weight subsample best_iteration best_logloss
 49         4 0.05     0              0.7                3       0.8            164     1.194143
 29         4 0.05     1              0.8                3       0.7            164     1.194274
@@ -368,6 +368,19 @@ max_depth  eta gamma colsample_bytree min_child_weight subsample best_iteration 
 21         4 0.05     1              0.7                3       0.7            164     1.195042
 17         4 0.05     0              0.7                3       0.7            164     1.195124
 13         4 0.05     1              0.8                1       0.7            164     1.195276
+
+8:2
+   max_depth  eta gamma colsample_bytree min_child_weight subsample best_iteration best_logloss
+21         4 0.05     1              0.7                3       0.7            185     1.191683
+5          4 0.05     1              0.7                1       0.7            186     1.191864
+17         4 0.05     0              0.7                3       0.7            185     1.192240
+39         4 0.10     1              0.7                1       0.8             91     1.192241
+37         4 0.05     1              0.7                1       0.8            180     1.192505
+61         4 0.05     1              0.8                3       0.8            175     1.192541
+35         4 0.10     0              0.7                1       0.8             91     1.192716
+1          4 0.05     0              0.7                1       0.7            185     1.192766
+49         4 0.05     0              0.7                3       0.8            168     1.192945
+19         4 0.10     0              0.7                3       0.7             88     1.192981
 
 ```{r}
 params_6 <- list(
@@ -386,7 +399,7 @@ pred_6 <- train_and_evaluate(params_6, dtrain, dtest, nrounds = 164)
 pred_6$cm
 ```
 ```{r}
-params_6 <- list(
+params_7 <- list(
   objective        = "multi:softprob",
   num_class        = n_class,
   eval_metric      = "mlogloss",
@@ -398,6 +411,6 @@ params_6 <- list(
   gamma            = 1
 )
 
-pred_6 <- train_and_evaluate(params_6, dtrain, dtest, nrounds = 164)
-pred_6$cm
+pred_7 <- train_and_evaluate(params_7, dtrain, dtest, nrounds = 164)
+pred_7$cm
 ```

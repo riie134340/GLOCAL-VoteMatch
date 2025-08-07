@@ -1,0 +1,358 @@
+---
+title: "VoteMatch - Modeling"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document:
+    latex_engine: xelatex
+output_dir: docs
+---
+
+### Load Data
+
+We loaded the pre-processed data saved from the previous step.
+The initial dataset contained a total of 15,484 rows, with several variables related to voters' characteristics and political opinions.
+
+```{r load-libs, message=FALSE}
+rm(list = ls())
+
+library(dplyr)
+library(nnet)
+library(randomForest)
+library(ggplot2)
+library(lattice)
+library(caret)
+#load("preprocessed_data.RData")
+load("scripts/preprocessed_data_2.RData")
+
+# Check the structure of the main data
+colnames(ces_Modeling)
+```
+```{r}
+#str(ces_Modeling)
+summary(ces_Modeling)
+```
+### Handling Missing Value
+
+*imm_duration*: This variable was removed due to significant missing data. It contained values resembling years of immigration, which and had a high proportion of missing values (over 13000).
+
+*Duration__in_seconds_*: This variable was used for data quality checks and was not needed in the final model. It was removed to ensure the dataset was more focused on the relevant features for prediction.
+
+*cps21_rel_imp*: Although the exact reason for the variable's importance is unclear, it was removed because its NA values had a high occurrence and were second only to immduration in terms of missingness. Additionally, its missing data did not align well with other variables, and its inclusion was not deemed essential for the prediction task.
+
+```{r}
+ces_Modeling_removed <- ces_Modeling %>%
+  select(-imm_duration, -cps21_rel_imp, -Duration__in_seconds_)
+
+summary(ces_Modeling_removed)
+ces_Modeling_no_NA <- ces_Modeling_removed
+
+# Remove rows with NA values in any of the features or target
+#ces_Modeling_no_NA <- ces_Modeling_removed %>% na.omit()
+```
+
+Rows with NA values in key variables were filtered out. After handling missing values and removing unnecessary variables, the data was reduced to approximately 11,000 rows.
+
+### Data Split
+
+The dataset was split into two groups:
+
+- *train_data*: Training set (70%), used to train the model.
+- *test_data*: Testing set (30%), used to evaluate the model's performance.
+
+```{r}
+set.seed(123)
+train_index <- sample(seq_len(nrow(ces_Modeling_no_NA)), size = 0.7 * nrow(ces_Modeling_no_NA))
+train_data <- ces_Modeling_no_NA[train_index, ]
+test_data <- ces_Modeling_no_NA[-train_index, ]
+```
+
+### Model Selection
+
+This project aimed to predict party vote choice using two models:
+
+- Multinomial Logistic Regression
+- Random Forest Classifier
+
+The models were trained on the dataset, with cross-validation used for performance evaluation, and subsequently tested on a separate test dataset.
+
+```{r}
+# Multinomial Logistic Regression
+log_model_1 <- multinom(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
+                        cps21_bornin_canada + cps21_marital + cps21_age,
+                        data = train_data, verbose = FALSE)
+
+# Random Forest
+rf_model_1 <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 +
+                        cps21_bornin_canada + cps21_marital + cps21_age,
+                        data = train_data)
+```
+
+### Evaluation of Model Performance
+
+```{r}
+# Use Multinomial Logistic Regression to predict
+log_predictions_1 <- predict(log_model_1, newdata = test_data)
+
+conf_matrix_log <- confusionMatrix(log_predictions_1, test_data$votechoice)
+
+
+# Use Random Forest to predict
+rf_predictions_1 <- predict(rf_model_1, newdata = test_data)
+
+conf_matrix_rf <- confusionMatrix(rf_predictions_1, test_data$votechoice)
+
+# Print Result
+cat("\n---", "log_predictions_1", "---\n")
+print(conf_matrix_log)
+cat("\n---", "rf_predictions_1", "---\n")
+print(conf_matrix_rf)
+```
+
+The models faced difficulties in predicting smaller classes like Green Party, which had very few samples compared to larger classes like Liberal Party and Conservative Party.
+
+Based on the confusion matrix and sensitivity values, it is clear that the model needs adjustments. Adjusting class weights is one potential solution to improve predictions for the minority classes.
+
+### Model Adjustments
+
+```{r results = 'hide'}
+# Define class weights (assign higher weights to minority classes)
+class_weights <- c('Bloc Québécois' = 1, 
+                   'Conservative Party' = 1, 
+                   'Green Party' = 2,   # Higher weight for the minority class
+                   'Liberal Party' = 1, 
+                   'NDP' = 1, 
+                   'People\'s Party' = 2)  # Higher weight for the minority class
+
+# Train random forest model with class weights
+rf_model_2 <- randomForest(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 + 
+                         cps21_bornin_canada + cps21_marital + cps21_age, 
+                         data = train_data, 
+                         classwt = class_weights)
+
+
+# Define class weights for Multinomial Logistic Regression
+train_data_2<-train_data
+train_data_2$weights <- ifelse(train_data$votechoice == "Bloc Québécois", 1,
+                             ifelse(train_data$votechoice == "Conservative Party", 1,
+                                    ifelse(train_data$votechoice == "Green Party", 2,
+                                           ifelse(train_data$votechoice == "Liberal Party", 1,
+                                                  ifelse(train_data$votechoice == "NDP", 1, 
+                                                         2)))))
+
+# Train Multinomial Logistic Regression model with class weights
+log_model_2 <- train(votechoice ~ cps21_fed_gov_sat + pes21_province + pes21_inequal + pes21_abort2 + 
+                   cps21_bornin_canada + cps21_marital + cps21_age, 
+                   data = train_data_2,
+                   method = "multinom",  
+                   trControl = trainControl(method = "cv", number = 10, verboseIter = FALSE), 
+                   weights = train_data_2$weights)
+
+```
+
+### Evaluation of Adjusted Model Performance (Second Prediction)
+
+```{r}
+# Use Multinomial Logistic Regression to predict
+log_predictions_2 <- predict(log_model_2, newdata = test_data)
+
+conf_matrix_log <- confusionMatrix(log_predictions_2, test_data$votechoice)
+
+
+# Use Random Forest to predict
+rf_predictions_2 <- predict(rf_model_2, newdata = test_data)
+
+conf_matrix_rf <- confusionMatrix(rf_predictions_2, test_data$votechoice)
+
+# Print Result
+cat("\n---", "log_predictions_2", "---\n")
+print(conf_matrix_log)
+cat("\n---", "rf_predictions_2", "---\n")
+print(conf_matrix_rf)
+```
+
+**Multinomial Logistic Regression**: 
+
+Adjusting class weights led to an increase in performance for the Bloc Québécois and Conservative Party classes, but the Green Party and People's Party continue to be problematic with low sensitivity scores. There seems to be overfitting with the dominant classes, while the minority classes are still underrepresented.
+
+**Random Forest**:
+
+After adjusting the class weights, the accuracy dropped significantly from 64.32% to 52.48%. While the model's sensitivity for Bloc Québécois and Conservative Party improved, it failed to improve prediction performance for the minority classes, such as Green Party and People's Party, which continued to have low sensitivity values.
+
+The Green Party and People's Party remain underrepresented, which suggests that further improvements are needed for minority class predictions, indicating a need for further refinement or use of additional techniques (e.g., SMOTE).
+
+### XGBoost
+
+```{r}
+library(xgboost)
+```
+
+```{r}
+# 将所有因子列转换为数值型
+train_data_numeric <- train_data %>%
+  mutate_if(is.factor, as.numeric)
+test_data_numeric <- test_data %>%
+  mutate_if(is.factor, as.numeric)
+
+# 检查转换结果
+str(train_data_numeric)
+```
+
+```{r}
+# Prepare the training and testing matrices
+train_matrix <- xgb.DMatrix(data = as.matrix(train_data_numeric[, -which(names(train_data_numeric) == "votechoice")]), 
+                            label = as.numeric(train_data_numeric$votechoice) - 1)  # Label should be 0-indexed
+
+test_matrix <- xgb.DMatrix(data = as.matrix(test_data_numeric[, -which(names(test_data_numeric) == "votechoice")]), 
+                           label = as.numeric(test_data_numeric$votechoice) - 1)  # Label should be 0-indexed
+```
+
+
+```{r}
+# Define parameters for XGBoost
+params <- list(
+  objective = "multi:softmax",  # Multi-class classification
+  num_class = length(unique(train_data_numeric$votechoice)),  # Number of classes (political parties)
+  eval_metric = "merror",  # Multi-class error rate
+  max_depth = 6,  # Max depth of the trees
+  eta = 0.1,  # Learning rate
+  subsample = 0.8,  # Subsample ratio
+  colsample_bytree = 0.8  # Subsample ratio of columns
+)
+
+# Train the XGBoost model
+xg_model <- xgb.train(params = params, 
+                      data = train_matrix, 
+                      nrounds = 100,  # Number of boosting rounds
+                      verbose = 0)  # Suppress output
+
+```
+
+```{r}
+# 计算类别权重：如果目标变量是 "Green Party" 或 "People's Party"，权重为 10；其他类别为 1
+class_weights <- ifelse(train_data_numeric$votechoice == "Green Party", 20, 
+                        ifelse(train_data_numeric$votechoice == "People's Party", 20, 1))
+
+# 创建训练矩阵，传入特征数据（去除 votechoice）和目标变量，并使用计算的权重
+train_matrix <- xgb.DMatrix(data = as.matrix(train_data_numeric[, -which(names(train_data_numeric) == "votechoice")]), 
+                            label = as.numeric(train_data_numeric$votechoice) - 1,  # 0-indexed 标签
+                            weight = class_weights)  # 使用权重
+
+params <- list(
+  objective = "multi:softmax",  # 多分类问题
+  num_class = length(unique(train_data$votechoice)),  # 类别数
+  eval_metric = "merror",  # 多分类误差率
+  max_depth = 6,  # 最大树深度
+  eta = 0.1,  # 学习率
+  subsample = 0.8,  # 样本采样比例
+  colsample_bytree = 0.8  # 特征采样比例
+)
+
+# 训练 XGBoost 模型
+xg_model <- xgb.train(params = params, 
+                      data = train_matrix, 
+                      nrounds = 1000,  # 迭代次数
+                      verbose = 0)  # 禁用输出
+
+
+```
+
+```{r}
+# Predict on the test set
+xg_predictions <- predict(xg_model, newdata = test_matrix)
+
+# Convert predictions back to original labels
+predicted_labels <- factor(xg_predictions, levels = 0:(length(unique(train_data$votechoice)) - 1), 
+                           labels = levels(train_data$votechoice))
+
+# Evaluate model performance
+library(caret)
+conf_matrix_xg <- confusionMatrix(predicted_labels, test_data$votechoice)
+print(conf_matrix_xg)
+
+```
+
+
+
+
+```{r}
+# 统计每个类别的样本数
+class_counts <- table(train_data_numeric$votechoice)
+# 总样本数
+total_count <- sum(class_counts)
+# 类别数
+n_class <- length(class_counts)
+
+# 为每个类别计算权重： total / (n_class * freq)
+# 这样所有类别加起来的总权重大约等于总样本数
+class_weights_map <- total_count / (n_class * class_counts)
+# 查看各类别对应的权重
+class_weights_map
+
+```
+
+
+
+```{r}
+# 创建一个与 train_data_numeric 行数相同的权重向量
+sample_weights <- class_weights_map[ as.character(train_data_numeric$votechoice) ]
+# 查看前几行，确保权重对应正确
+head(sample_weights)
+
+```
+```{r}
+# 特征矩阵（去掉 votechoice 列）
+train_matrix <- as.matrix(train_data_numeric[, setdiff(names(train_data_numeric), "votechoice")])
+# 标签（0-indexed）
+train_label <- as.numeric(train_data_numeric$votechoice) - 1
+
+# 带样本权重的 DMatrix
+dtrain <- xgb.DMatrix(
+  data   = train_matrix,
+  label  = train_label,
+  weight = sample_weights
+)
+
+params <- list(
+  objective        = "multi:softprob",  # multi:softprob 可以输出各类别概率
+  num_class        = n_class,          # 类别数
+  eval_metric      = "mlogloss",       # 多分类对数损失
+  eta              = 0.1,              # 学习率
+  max_depth        = 6,                # 树最大深度
+  min_child_weight = 1,                # 叶子节点最小样本权重
+  subsample        = 0.8,              # 样本采样比例
+  colsample_bytree = 0.8,              # 特征采样比例
+  gamma            = 0                 # 分裂所需最小损失减少
+)
+
+# 训练
+xg_model <- xgb.train(
+  params    = params,
+  data      = dtrain,
+  nrounds   = 100,
+  verbose   = 0
+)
+
+```
+
+```{r}
+# 构造测试集 DMatrix（不需要 weight）
+dtest <- xgb.DMatrix(
+  data  = as.matrix(test_data_numeric[, setdiff(names(test_data_numeric), "votechoice")]),
+  label = as.numeric(test_data_numeric$votechoice) - 1
+)
+
+# 输出概率
+pred_prob <- predict(xg_model, newdata = dtest)
+# 将概率矩阵转换为类别索引
+pred_mat  <- matrix(pred_prob, ncol = n_class, byrow = TRUE)
+pred_idx  <- max.col(pred_mat) - 1
+# 转回原始标签
+pred_labels <- factor(pred_idx, levels = 0:(n_class-1), labels = levels(train_data$votechoice))
+
+# 评估
+library(caret)
+confusionMatrix(pred_labels, test_data$votechoice)
+
+```
