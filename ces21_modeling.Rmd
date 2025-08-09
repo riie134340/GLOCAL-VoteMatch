@@ -5,6 +5,14 @@ output:
     df_print: paged
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  cache = TRUE,         
+  autodep = TRUE,       
+  cache.path = "cache/" 
+)
+```
+
 ### Load Data
 
 We loaded the pre-processed data saved from the previous step.
@@ -238,7 +246,7 @@ print(xgb_tuned$bestTune)
 The built-in tuning tools (e.g., `caret::train()`) do not fully support multi-class `logloss` (`mlogloss`) as the evaluation metric.  
 To work around this, we implemented a **manual grid search** using `xgb.cv()`.
 
-```{r tuning, cache=TRUE}
+```{r xgb-tuning-log-loss, cache=TRUE}
 num_class <- length(unique(train_label))
 
 # Define the grid of hyperparameters to search
@@ -308,7 +316,21 @@ print(head(results_df, 10))
 19         4 0.10     0              0.7                3       0.7             88     1.192981
 
 ```{r}
-params_6 <- list(
+params_2 <- list(
+  objective        = "multi:softprob",
+  num_class        = n_class,
+  eval_metric      = "mlogloss",
+  eta              = 0.05,
+  max_depth        = 4,
+  min_child_weight = 1,
+  subsample        = 0.7,
+  colsample_bytree = 0.7,
+  gamma            = 0
+)
+pred_2 <- train_and_evaluate(params_2, dtrain, dtest, nrounds = 200)
+pred_2$cm
+
+params_3 <- list(
   objective        = "multi:softprob",
   num_class        = n_class,
   eval_metric      = "mlogloss",
@@ -319,10 +341,162 @@ params_6 <- list(
   colsample_bytree = 0.7,
   gamma            = 1
 )
-
-pred_6 <- train_and_evaluate(params_6, dtrain, dtest, nrounds = 164)
-pred_6$cm
+pred_3 <- train_and_evaluate(params_3, dtrain, dtest, nrounds = 200)
+pred_3$cm
 ```
+```{r early-stop-1, cache=TRUE}
+params_4 <- params_2
+set.seed(42)
+cv_result <- xgb.cv(
+  params                = params_4,
+  data                  = dtrain,
+  nrounds               = 500,                
+  nfold                 = 5,
+  early_stopping_rounds = 50,
+  verbose               = 0,
+  stratified            = TRUE,               
+  showsd                = TRUE,
+  metrics               = "mlogloss"
+)
+
+best_nrounds <- cv_result$best_iteration
+cat("Best nrounds from CV:", best_nrounds, "\n")
+
+pred_4 <- train_and_evaluate(params_4, dtrain, dtest, nrounds = best_nrounds)
+```
+
+```{r early-stop-2, cache=TRUE}
+params_5 <- params_3
+set.seed(42)
+cv_result <- xgb.cv(
+  params                = params_5,
+  data                  = dtrain,
+  nrounds               = 500,                
+  nfold                 = 5,
+  early_stopping_rounds = 50,
+  verbose               = 0,
+  stratified            = TRUE,               
+  showsd                = TRUE,
+  metrics               = "mlogloss"
+)
+
+best_nrounds <- cv_result$best_iteration
+cat("Best nrounds from CV:", best_nrounds, "\n")
+
+
+pred_5 <- train_and_evaluate(params_5, dtrain, dtest, nrounds = best_nrounds)
+```
+```{r}
+pred_4$cm
+pred_5$cm
+```
+
+### Model Performance Analysis
+
+```{r}
+metrics <- c("Sensitivity", "Pos Pred Value", "Balanced Accuracy")
+
+rbind(
+  accuracy = c(pred_2$cm$byClass["Class: Green Party", metrics], 
+               Accuracy = pred_2$cm$overall["Accuracy"]),
+  logloss = c(pred_3$cm$byClass["Class: Green Party", metrics], 
+              Accuracy = pred_3$cm$overall["Accuracy"]),
+  accuracy_best_nround = c(pred_4$cm$byClass["Class: Green Party", metrics], 
+                           Accuracy = pred_4$cm$overall["Accuracy"]),
+  logloss_best_nround = c(pred_5$cm$byClass["Class: Green Party", metrics], 
+                          Accuracy = pred_5$cm$overall["Accuracy"])
+)
+```
+
+
+```{r}
+green_sens <- c(
+  A = pred_2$cm$byClass["Class: Green Party", "Sensitivity"],
+  B = pred_3$cm$byClass["Class: Green Party", "Sensitivity"],
+  C = pred_4$cm$byClass["Class: Green Party", "Sensitivity"],
+  D = pred_5$cm$byClass["Class: Green Party", "Sensitivity"]
+)
+
+barplot(green_sens, main = "Green Party Sensitivity", ylim = c(0, 0.4))
+
+```
+
+```{r}
+params_map <- list(
+  A = params_2,  # pred_2
+  B = params_3,  # pred_3
+  C = params_4,  # pred_4
+  D = params_5   # pred_5
+)
+
+nrounds_map <- c(
+  A = 200,
+  B = 200,
+  C = 185,
+  D = 185
+)
+
+R <- 20
+set.seed(1)
+seeds <- sample(1:10000, R)
+green_row <- "Class: Green Party"
+
+run_once <- function(params, dtrain, dtest, nrounds, seed) {
+  set.seed(seed)
+  out <- train_and_evaluate(params, dtrain, dtest, nrounds = nrounds)
+  c(
+    Accuracy    = as.numeric(out$cm$overall["Accuracy"]),
+    Green_Sens  = as.numeric(out$cm$byClass[green_row, "Sensitivity"])
+  )
+}
+
+res_list <- lapply(names(nrounds_map), function(m){
+  mat <- sapply(seeds, function(s) run_once(params_map[[m]], dtrain, dtest, nrounds_map[[m]], s))
+  t(mat) %>% as.data.frame() %>% mutate(model = m)
+})
+
+res <- dplyr::bind_rows(res_list)
+
+summary_tbl <- res %>%
+  dplyr::group_by(model) %>%
+  dplyr::summarise(
+    Accuracy_mean   = mean(Accuracy),
+    Accuracy_sd     = sd(Accuracy),
+    GreenSens_mean  = mean(Green_Sens),
+    GreenSens_sd    = sd(Green_Sens),
+    .groups = "drop"
+  ) %>%
+  dplyr::arrange(desc(Accuracy_mean))
+
+summary_tbl
+```
+
+```{r}
+# Scatter plot with error bars (means ± SD)
+library(ggplot2)
+
+ggplot(summary_tbl, aes(x = Accuracy_mean, y = GreenSens_mean, color = model)) +
+  geom_point(size = 4) +
+  geom_errorbar(aes(ymin = GreenSens_mean - GreenSens_sd,
+                    ymax = GreenSens_mean + GreenSens_sd),
+                width = 0.001) +
+  geom_errorbarh(aes(xmin = Accuracy_mean - Accuracy_sd,
+                     xmax = Accuracy_mean + Accuracy_sd),
+                 height = 0.001) +
+  geom_text(aes(label = model), vjust = -1.2, show.legend = FALSE) +
+  labs(
+    title = "Model Comparison (Mean ± SD)",
+    x = "Overall Accuracy (mean ± SD)",
+    y = "Green Party Sensitivity (mean ± SD)"
+  ) +
+  theme_minimal()
+
+```
+Across 20 repeated runs, Model A achieved the highest mean overall accuracy (0.553) and the lowest standard deviation (0.00221), indicating both strong performance and high stability.
+In terms of Green Party sensitivity, Model C had the highest mean value (0.240), but also showed larger variability (SD = 0.0227), which suggests that its advantage in this metric is less consistent across runs.
+
+Models B and D performed slightly worse overall. Model B’s mean accuracy (0.552) was marginally lower than A’s and it had the lowest mean Green Party sensitivity (0.232). Model D not only had the lowest mean accuracy (0.551) but also the largest variability in both accuracy and sensitivity, making it the least stable choice.
+
 
 
 
