@@ -25,7 +25,7 @@ library(xgboost)
 library(caret)
 
 #load("preprocessed_data.RData")
-load("scripts/preprocessed_data_2.RData")
+load("output/preprocessed_data_2.RData")
 ```
 
 ```{r include=FALSE}
@@ -498,6 +498,20 @@ In terms of Green Party sensitivity, Model C had the highest mean value (0.240),
 Models B and D performed slightly worse overall. Model B’s mean accuracy (0.552) was marginally lower than A’s and it had the lowest mean Green Party sensitivity (0.232). Model D not only had the lowest mean accuracy (0.551) but also the largest variability in both accuracy and sensitivity, making it the least stable choice.
 
 
+```{r}
+# Save model & artifacts
+xgb.save(pred_4$model, "model_final.xgb")
+
+final_model <- list(
+  features   = setdiff(names(train_data_numeric), "votechoice"),
+  class_levels = levels(train_data$votechoice),
+  n_class    = length(levels(train_data$votechoice)),
+  params     = params_4,
+  nrounds    = 185
+)
+
+saveRDS(final_model, "output/modeling.rds")
+```
 
 
 ```{r include=FALSE}

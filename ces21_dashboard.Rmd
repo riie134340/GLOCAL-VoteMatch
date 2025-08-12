@@ -1,0 +1,115 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(xgboost)
+
+# 载入工件
+artifacts <- readRDS("output/modeling.rds")
+class_levels <- artifacts$class_levels
+```
+
+```{r}
+# 统一预处理：把用户输入映射到训练时的特征矩阵
+prepare_matrix <- function(df_user_numeric){
+  # 这里假设你在 Shiny 端已经把输入整理成与训练一致的数据框，并完成了 factor->numeric 的处理
+  mat <- as.matrix(df_user_numeric[, artifacts$features, drop = FALSE])
+  xgb.DMatrix(data = mat)
+}
+
+# 模型加载（Shiny的server启动时加载一次就好）
+mdl <- xgb.load("model_final.xgb")
+
+# 预测函数（输出：全类概率 + top-k）
+predict_party <- function(df_user_numeric, top_k = 3){
+  dnew <- prepare_matrix(df_user_numeric)
+  prob <- predict(mdl, newdata = dnew)
+  prob_mat <- matrix(prob, ncol = artifacts$n_class, byrow = TRUE)
+
+  # top-k
+  ord <- t(apply(prob_mat, 1, order, decreasing = TRUE))
+  top <- lapply(seq_len(nrow(prob_mat)), function(i){
+    idx <- ord[i, 1:top_k]
+    data.frame(
+      party = class_levels[idx],
+      prob  = prob_mat[i, idx],
+      stringsAsFactors = FALSE
+    )
+  })
+
+  list(probs = prob_mat, topk = top)
+}
+```
+
+```{r}
+library(shiny)
+
+ui <- fluidPage(
+  titlePanel("Party Tendency Recommender (Prototype)"),
+  sidebarLayout(
+    sidebarPanel(
+      # TODO: 替换为你的真实问题与选项，并在 server 里做映射到数值特征
+      selectInput("region", "Region", choices = c("Atlantic","Quebec","Ontario","Prairies","BC")),
+      selectInput("news", "News consumption", choices = c("Low","Medium","High")),
+      actionButton("go", "Get Recommendation")
+    ),
+    mainPanel(
+      plotOutput("bar_top3"),
+      tableOutput("table_full"),
+      textOutput("explain")
+    )
+  )
+)
+
+server <- function(input, output, session){
+  # 读入模型与工件（开局一次）
+  modeling <- readRDS("output/modeling.rds")
+  mdl <<- xgb.load("model_final.xgb")  # 放全局，避免重复加载
+
+  observeEvent(input$go, {
+    # === 1) 把用户答案 → 训练一致的“数值特征行” ===
+    # 这里演示：你需要按训练时的规则把factor→numeric；确保列名与 modeling$features 一致
+    df_user <- data.frame(
+      # 示例字段（请改成你真实的特征列；并与训练一致做编码/标准化）
+      region = input$region,
+      news   = input$news,
+      # ...
+      stringsAsFactors = TRUE
+    )
+
+    # 你训练时用的是 mutate_if(is.factor, as.numeric)，这里也做同样处理：
+    df_user_numeric <- dplyr::mutate_if(df_user, is.factor, as.numeric)
+
+    # === 2) 调用预测函数 ===
+    res <- predict_party(df_user_numeric, top_k = 3)
+    top3 <- res$topk[[1]]
+    probs <- res$probs[1,]
+
+    # === 3) 可视化 & 文案 ===
+    output$bar_top3 <- renderPlot({
+      barplot(top3$prob, names.arg = top3$party, ylim = c(0,1))
+    })
+
+    output$table_full <- renderTable({
+      data.frame(
+        party = modeling$class_levels,
+        prob  = round(probs, 3),
+        note  = ifelse(probs < 0.05, "low confidence (minor)", "")
+      )
+    }, striped = TRUE, bordered = TRUE)
+
+    output$explain <- renderText({
+      sprintf("People similar to you tend to vote %s (%.0f%%), then %s (%.0f%%).",
+              top3$party[1], 100*top3$prob[1],
+              top3$party[2], 100*top3$prob[2])
+    })
+  })
+}
+
+shinyApp(ui, server)
+
+```
+
