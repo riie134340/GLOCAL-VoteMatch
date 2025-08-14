@@ -48,14 +48,20 @@ predict_party <- function(df_user_numeric, top_k = 3){
 library(shiny)
 
 ui <- fluidPage(
-  titlePanel("Party Tendency Recommender (Prototype)"),
+  titlePanel("VoteMatch - Party Tendency Recommender (Prototype)"),
+  
+  # Sidebar with a slider input for number of bins  
   sidebarLayout(
     sidebarPanel(
-      # TODO: 替换为你的真实问题与选项，并在 server 里做映射到数值特征
-      selectInput("region", "Region", choices = c("Atlantic","Quebec","Ontario","Prairies","BC")),
+      selectInput("region", "Region", 
+                  choices = c("Atlantic","Quebec","Ontario","Prairies","BC")),
       selectInput("news", "News consumption", choices = c("Low","Medium","High")),
+      selectInput('age',"Age", value=18, min = 18, max = 100),
+      textOutput('msg'),
       actionButton("go", "Get Recommendation")
     ),
+    
+    # Show a plot of the generated distribution
     mainPanel(
       plotOutput("bar_top3"),
       tableOutput("table_full"),
@@ -111,5 +117,68 @@ server <- function(input, output, session){
 
 shinyApp(ui, server)
 
+```
+
+```{r}
+library(shiny)
+library(shinythemes)
+
+ui <- fluidPage(
+  theme = shinytheme("yeti"),
+  
+  navbarPage(
+    "VoteMatch",
+    tabPanel("Input",
+      sidebarPanel(
+      ),
+      mainPanel(
+        selectInput("region", "Region", 
+                    choices = c("Atlantic","Quebec","Ontario","Prairies","BC")),
+        selectInput("news", "News consumption", choices = c("Low","Medium","High")),
+        sliderInput('age',"Age", value=18, min = 18, max = 100),
+        textOutput('msg'),
+        plotOutput('p1'),
+        actionButton("go", "Get Recommendation")
+      )
+    )
+  )
+)
+
+server <- function(input, output, session){
+  output$msg<-renderText({
+    paste(input$region, input$age, sep='---')
+  })
+  output$p1<-renderPlot(plot(1:10))
+}
+
+shinyApp(ui, server)
+
+```
+```{r}
+# 先加载 haven（处理 Stata label）
+library(haven)
+
+# feature 列表
+features <- artifacts$features
+
+# 循环查看每个变量
+for (feat in features) {
+  cat("====", feat, "====\n")
+  
+  # 判断是不是 labelled（CES 数据集很多都是 labelled）
+  if (is.labelled(ces2021[[feat]])) {
+    # 转成 factor 看 levels
+    print(levels(as_factor(ces2021[[feat]])))
+  } else if (is.factor(ces2021[[feat]])) {
+    print(levels(ces2021[[feat]]))
+  } else if (is.numeric(ces2021[[feat]])) {
+    # 数值型就看 summary
+    print(summary(ces2021[[feat]]))
+  } else {
+    # 其他类型直接用 unique
+    print(unique(ces2021[[feat]]))
+  }
+  cat("\n")
+}
 ```
 
