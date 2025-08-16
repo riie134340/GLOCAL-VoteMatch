@@ -58,6 +58,7 @@ ui <- fluidPage(
       selectInput("news", "News consumption", choices = c("Low","Medium","High")),
       selectInput('age',"Age", value=18, min = 18, max = 100),
       textOutput('msg'),
+      plotOutput('p1'),
       actionButton("go", "Get Recommendation")
     ),
     
@@ -122,38 +123,389 @@ shinyApp(ui, server)
 ```{r}
 library(shiny)
 library(shinythemes)
+library(xgboost)
+
+choices_strong_disagree_to_agree <- c(
+  "Strongly disagree", 
+  "Somewhat disagree", 
+  "Neither agree nor disagree", 
+  "Somewhat agree", 
+  "Strongly agree", 
+  "Don't know / Prefer not to answer"
+)
+
+choices_yes_no_dk <- c(
+  "Yes", "No", "Don't know / Prefer not to answer"
+)
+
+choices_yes_some_no_dk <- c(
+  "Yes", "In some circumstances", "No", "Don't know / Prefer not to answer"
+)
+
+choices_fed_gov_sat <- c(
+  "Very satisfied", "Fairly satisfied", "Not very satisfied", "Not at all satisfied", "Don't know / Prefer not to answer"
+)
+
+choices_province <- c(
+  "Alberta","British Columbia","Manitoba","New Brunswick","Newfoundland and Labrador",
+  "Northwest Territories","Nova Scotia","Nunavut","Ontario","Prince Edward Island",
+  "Quebec","Saskatchewan","Yukon"
+)
 
 ui <- fluidPage(
   theme = shinytheme("yeti"),
   
   navbarPage(
     "VoteMatch",
+             
+    # Tab 1
     tabPanel("Input",
-      sidebarPanel(
-      ),
-      mainPanel(
-        selectInput("region", "Region", 
-                    choices = c("Atlantic","Quebec","Ontario","Prairies","BC")),
-        selectInput("news", "News consumption", choices = c("Low","Medium","High")),
-        sliderInput('age',"Age", value=18, min = 18, max = 100),
-        textOutput('msg'),
-        plotOutput('p1'),
-        actionButton("go", "Get Recommendation")
+      sidebarLayout(
+        sidebarPanel(
+          h4("Project Description"),
+          p("This project analyzes CES (Canadian Election Study) data to build a predictive model and develop an interactive interactive dashboard. Please answer the questions honestly. 'Don't know' responses will be ignored for prediction purposes.")
+          ),
+        
+        mainPanel(
+          h3("Please answer the following questions:"),
+          
+          radioButtons("q1", "How satisfied are you with the performance of the federal government under Justin Trudeau?", choices = choices_fed_gov_sat),
+          selectInput("q2", "In which province or territory are you currently living?", choices = choices_province),
+          radioButtons("q3", "The government does not care much about what people like me think.", choices = choices_strong_disagree_to_agree),
+          
+          radioButtons("q4", "How much do you think should be done for racial minorities?", choices = c("Much more", "Somewhat more", "About the same as now", "Somewhat less", "Much less", "Don't know / Prefer not to answer")),
+          radioButtons("q5", "When there is a conflict between protecting the environment and creating jobs, jobs should come first.", choices = choices_strong_disagree_to_agree),
+          radioButtons("q6", "We have gone too far in pushing equal rights in this country.", choices = choices_strong_disagree_to_agree),
+          
+          radioButtons("q7", "This country would have many fewer problems if there was more emphasis on traditional family values.", choices = choices_strong_disagree_to_agree),
+          radioButtons("q8", "Too many recent immigrants just don't want to fit in to Canadian society.", choices = choices_strong_disagree_to_agree),
+                 
+          radioButtons("q9", "Is income inequality a big problem in Canada?", choices = c("Definitely yes","Probably yes","Not sure","Probably not","Definitely not","Don't know / Prefer not to answer")),
+          radioButtons("q10", "The government should leave it entirely to the private sector to create jobs.", choices = choices_strong_disagree_to_agree),
+          radioButtons("q11", "Should abortion be banned?", choices = choices_yes_some_no_dk),
+          radioButtons("q12", "We have gone too far in pushing bilingualism in Canada.", 
+                              choices = choices_strong_disagree_to_agree),
+          radioButtons("q13", "Newer lifestyles are contributing to the breakdown of our society.", 
+                              choices = choices_strong_disagree_to_agree),
+          radioButtons("q14", "Immigrants take jobs away from other Canadians.", 
+                              choices = choices_strong_disagree_to_agree),
+          radioButtons("q15", "Were you born in Canada?", 
+                              choices = choices_yes_no_dk),
+          radioButtons("q16", "Are you presently married, living with a partner, divorced, separated, widowed, or have you never been married?", choices = c("Married","Living with a  partner","Divorced","Separated","Widowed","Never Married","Don't know / Prefer not to answer")),
+                 
+          numericInput("q17", "Respondent age in years:", value = NA, min = 0),
+          actionButton("submit", "Submit")
+          )
+        ) # sidebarLayout
+      ) # tabPanel
+    ) # navbarPage
+  ) # fluidPage
+
+server <- function(input, output, session) {
+  output$results <- renderPrint({
+    input$submit
+    isolate({
+      list(
+          cps21_fed_gov_sat = input$q1,
+          pes21_province = input$q2,
+          pes21_govtcare = input$q3,
+          pes21_donerm = input$q4,
+          pes21_envirojob = input$q5,
+          pes21_equalrights = input$q6,
+          pes21_famvalues = input$q7,
+          pes21_fitin = input$q8,
+          pes21_inequal = input$q9,
+          pes21_privjobs = input$q10,
+          pes21_abort2 = input$q11,
+          pes21_bilingualism = input$q12,
+          pes21_newerlife = input$q13,
+          pes21_immigjobs = input$q14,
+          cps21_bornin_canada = input$q15,
+          cps21_marital = input$q16,
+          cps21_age = input$q17
       )
+    })
+  })
+}
+
+
+shinyApp(ui, server)
+
+```
+
+```{r}
+library(shiny)
+library(xgboost)
+
+# 假设 artifacts 已经保存了模型
+artifacts <- readRDS("output/modeling.rds")
+
+# 16个问题的选项示例（根据你给的替换掉原来的1,2,3,4）
+question_options <- list(
+  q1 = c("Strongly agree", "Agree", "Neutral", "Disagree", "Strongly disagree"),
+  q2 = c("Option A", "Option B", "Option C"),
+  q3 = c("Yes", "No"),
+  q4 = c("Option 1", "Option 2", "Option 3"),
+  q5 = c("Yes", "No"),
+  q6 = c("Option 1", "Option 2", "Option 3"),
+  q7 = c("Option A", "Option B"),
+  q8 = c("Yes", "No"),
+  q9 = c("Strongly agree", "Agree", "Neutral", "Disagree", "Strongly disagree"),
+  q10 = c("Option A", "Option B"),
+  q11 = c("Yes", "No"),
+  q12 = c("Option 1", "Option 2"),
+  q13 = c("Yes", "No"),
+  q14 = c("Option A", "Option B"),
+  q15 = c("Yes", "No"),
+  q16 = c("Age range 18-29", "30-44", "45-59", "60+")
+)
+
+ui <- fluidPage(
+  titlePanel("Voter Preference Prediction"),
+
+  sidebarLayout(
+    sidebarPanel(
+      h4("Project description"),
+      p("This project predicts the likelihood of a voter supporting each Canadian political party based on their responses to 16 questions. Select your answers below and click Predict to see probabilities.")
+    ),
+
+    mainPanel(
+      # 生成16个下拉菜单
+      lapply(1:16, function(i) {
+        selectInput(
+          inputId = paste0("q", i),
+          label = paste("Question", i),
+          choices = question_options[[paste0("q", i)]]
+        )
+      }),
+      actionButton("goButton", "Predict"),
+      br(), br(),
+      tableOutput("pred")
     )
   )
 )
 
-server <- function(input, output, session){
-  output$msg<-renderText({
-    paste(input$region, input$age, sep='---')
-  })
-  output$p1<-renderPlot(plot(1:10))
+server <- function(input, output, session) {
+
+  output$pred <- renderTable({
+    input$goButton  # 点击按钮触发
+
+    # 用 isolate 只在点击时获取输入
+    user_input <- isolate({
+      data.frame(
+        cps21_fed_gov_sat = input$q1,
+        pes21_province = input$q2,
+        pes21_govtcare = input$q3,
+        pes21_donerm = input$q4,
+        pes21_envirojob = input$q5,
+        pes21_equalrights = input$q6,
+        pes21_famvalues = input$q7,
+        pes21_fitin = input$q8,
+        pes21_inequal = input$q9,
+        pes21_privjobs = input$q10,
+        pes21_abort2 = input$q11,
+        pes21_bilingualism = input$q12,
+        pes21_newerlife = input$q13,
+        pes21_immigjobs = input$q14,
+        cps21_bornin_canada = input$q15,
+        cps21_age = input$q16,
+        stringsAsFactors = FALSE
+      )
+    })
+
+    # 如果模型训练时需要 factor -> numeric 编码，这里也要做
+    # user_input[] <- lapply(user_input, function(x) as.numeric(factor(x)))
+
+    # 构建 DMatrix
+    dmat <- xgb.DMatrix(data = as.matrix(user_input))
+
+    # 预测
+    pred_prob <- predict(artifacts$model, dmat)
+    pred_mat <- matrix(pred_prob, nrow=1, ncol=artifacts$n_class, byrow=TRUE)
+    colnames(pred_mat) <- artifacts$class_levels
+    pred_mat
+  }, rownames = TRUE)
 }
 
 shinyApp(ui, server)
 
 ```
+
+#### 1
+
+```{r}
+library(shiny)
+library(shinythemes)
+library(xgboost)
+
+choices_agree <- c(
+  "Strongly disagree", 
+  "Somewhat disagree", 
+  "Neither agree nor disagree", 
+  "Somewhat agree", 
+  "Strongly agree", 
+  "Don't know / Prefer not to answer"
+)
+
+choices_yes_no <- c(
+  "Yes", "No", "Don't know / Prefer not to answer"
+)
+
+choices_province <- c(
+  "Alberta","British Columbia","Manitoba","New Brunswick","Newfoundland and Labrador",
+  "Northwest Territories","Nova Scotia","Nunavut","Ontario","Prince Edward Island",
+  "Quebec","Saskatchewan","Yukon"
+)
+
+age_input <- sliderInput(
+  inputId = "q1",
+  label = "Your age (in years):",
+  min = 18,
+  max = 100,
+  value = 30
+)
+
+question_texts <- c(
+  "Were you born in Canada?",
+  "In which province or territory are you currently living?",
+  "Are you presently married, living with a partner, divorced, separated, widowed, or have you never been married?",
+  "The government does not care much about what people like me think.",
+  "How satisfied are you with the performance of the federal government under Justin Trudeau?",
+  "We have gone too far in pushing equal rights in this country.",
+  "How much do you think should be done for racial minorities?",
+  "Should abortion be banned?",
+  "This country would have many fewer problems if there was more emphasis on traditional family values.",
+  "We have gone too far in pushing bilingualism in Canada.",
+  "Newer lifestyles are contributing to the breakdown of our society.",
+  "Too many recent immigrants just don't want to fit in to Canadian society.",
+  "Immigrants take jobs away from other Canadians.",
+  "Is income inequality a big problem in Canada?",
+  "The government should leave it entirely to the private sector to create jobs.",
+  "When there is a conflict between protecting the environment and creating jobs, jobs should come first."
+)
+
+choices_list <- list(
+  choices_yes_no,
+  choices_province,
+  c("Married", "Living with a partner", "Divorced", "Separated", "Widowed", "Never Married"),
+  choices_agree,
+  c("Very satisfied", "Fairly satisfied", "Not very satisfied", "Not at all satisfied"),
+  choices_agree,
+  c("Much more", "Somewhat more", "About the same as now", "Somewhat less", "Much less"),
+  c("Yes", "In some circumstances", "No"),
+  choices_agree,
+  choices_agree,
+  choices_agree,
+  choices_agree,
+  choices_agree,
+  c("Definitely yes", "Probably yes", "Not sure", "Probably not", "Definitely not"),
+  choices_agree,
+  choices_agree
+)
+
+input_list <- lapply(seq_along(question_texts), function(i) {
+  selectInput(
+    inputId = paste0("q", i + 1),  # q2 ~ q17
+    label = question_texts[i],
+    choices = choices_list[[i]]
+  )
+})
+
+# 合并所有控件为一个 tagList（用于 UI 显示）
+all_inputs <- c(list(age_input), input_list)
+
+```
+
+```{r}
+artifacts <- readRDS("output/modeling.rds")
+
+
+ui <- fluidPage(
+  titlePanel("Voter Preference Prediction"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      h4("Project description"),
+      p("This project predicts the likelihood of a voter supporting each Canadian political party based on their responses to 16 questions. Select your answers below and click Predict to see probabilities.")
+    ),
+    
+    mainPanel(
+      do.call(tagList, all_inputs),      # 所有输入项
+      actionButton("goButton", "Predict"),  # 点击后触发预测
+      br(), br(),
+      tableOutput("pred")               # 预测结果表格
+    )
+  )
+)
+
+
+server <- function(input, output) {
+  # 加载模型（包含模型对象、特征名等）
+  artifacts <- readRDS("output/modeling.rds")
+  model <- artifacts$model
+  features <- artifacts$features
+  class_levels <- artifacts$class_levels
+  n_class <- artifacts$n_class
+  
+  # 构造预测函数
+  get_prediction <- reactive({
+    # 用 isolate 避免每个输入变动都立刻触发
+    isolate({
+      # 收集输入数据
+      input_values <- list(
+        cps21_age             = input$q1,
+        cps21_bornin_canada   = input$q2,
+        pes21_province        = input$q3,
+        cps21_marital         = input$q4,
+        pes21_govtcare        = input$q5,
+        cps21_fed_gov_sat     = input$q6,
+        pes21_equalrights     = input$q7,
+        pes21_donerm          = input$q8,
+        pes21_abort2          = input$q9,
+        pes21_famvalues       = input$q10,
+        pes21_bilingualism    = input$q11,
+        pes21_newerlife       = input$q12,
+        pes21_fitin           = input$q13,
+        pes21_immigjobs       = input$q14,
+        pes21_inequal         = input$q15,
+        pes21_privjobs        = input$q16,
+        pes21_envirojob       = input$q17
+      )
+      
+      # 转为 data.frame，列名顺序要和模型一致
+      df <- as.data.frame(input_values)[features]
+      
+      # 确保 factor 类型（如果需要，可以提前将选项值编码为数字）
+      # 示例：df$pes21_equalrights <- factor(df$pes21_equalrights, levels = ...)
+
+      # 做预测（softprob 输出每类的概率）
+      pred <- predict(model, as.matrix(df))
+      pred_mat <- matrix(pred, ncol = n_class, byrow = TRUE)
+      
+      # 排序后显示概率
+      pred_df <- data.frame(
+        Party = class_levels,
+        Probability = round(pred_mat[1, ], 4)
+      )
+      pred_df <- pred_df[order(-pred_df$Probability), ]
+      
+      return(pred_df)
+    })
+  })
+
+  # 输出预测表格
+  output$pred <- renderTable({
+    req(input$goButton)
+    isolate({
+      get_prediction()
+    })
+  })
+}
+
+shinyApp(ui, server)
+```
+
+
 ```{r}
 # 先加载 haven（处理 Stata label）
 library(haven)

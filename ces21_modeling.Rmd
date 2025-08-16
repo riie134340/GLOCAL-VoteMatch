@@ -503,6 +503,7 @@ Models B and D performed slightly worse overall. Model B’s mean accuracy (0.55
 xgb.save(pred_4$model, "model_final.xgb")
 
 final_model <- list(
+  model        = pred_4$model,
   features   = setdiff(names(train_data_numeric), "votechoice"),
   class_levels = levels(train_data$votechoice),
   n_class    = length(levels(train_data$votechoice)),
