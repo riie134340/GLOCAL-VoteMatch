@@ -19,7 +19,7 @@ We loaded the pre-processed data saved from the previous step.
 The initial dataset contained a total of 15,484 rows, with several variables related to voters' characteristics and political opinions.
 
 ```{r load-libs, message=FALSE}
-rm(list = ls())
+#rm(list = ls())
 library(dplyr)
 library(xgboost)
 library(caret)
@@ -499,6 +499,10 @@ Models B and D performed slightly worse overall. Model B’s mean accuracy (0.55
 
 
 ```{r}
+levels_list <- lapply(train_data, function(col) {
+  if (is.factor(col)) levels(col) else NULL
+})
+
 # Save model & artifacts
 xgb.save(pred_4$model, "model_final.xgb")
 
@@ -508,10 +512,11 @@ final_model <- list(
   class_levels = levels(train_data$votechoice),
   n_class    = length(levels(train_data$votechoice)),
   params     = params_4,
-  nrounds    = 185
+  nrounds    = 185,
+  levels_list  = levels_list
 )
 
-saveRDS(final_model, "output/modeling.rds")
+saveRDS(final_model, "output/modeling_2.rds")
 ```
 
 

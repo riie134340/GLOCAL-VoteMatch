@@ -4,12 +4,15 @@ output: html_notebook
 ---
 
 ```{r}
+rm(list = ls())
 library(dplyr)
 library(xgboost)
 
 # 载入工件
-artifacts <- readRDS("output/modeling.rds")
+# artifacts <- readRDS("output/modeling.rds")
+artifacts <- readRDS("output/modeling_2.rds")
 class_levels <- artifacts$class_levels
+levels_list <- artifacts$levels_list
 ```
 
 ```{r}
@@ -44,293 +47,6 @@ predict_party <- function(df_user_numeric, top_k = 3){
 }
 ```
 
-```{r}
-library(shiny)
-
-ui <- fluidPage(
-  titlePanel("VoteMatch - Party Tendency Recommender (Prototype)"),
-  
-  # Sidebar with a slider input for number of bins  
-  sidebarLayout(
-    sidebarPanel(
-      selectInput("region", "Region", 
-                  choices = c("Atlantic","Quebec","Ontario","Prairies","BC")),
-      selectInput("news", "News consumption", choices = c("Low","Medium","High")),
-      selectInput('age',"Age", value=18, min = 18, max = 100),
-      textOutput('msg'),
-      plotOutput('p1'),
-      actionButton("go", "Get Recommendation")
-    ),
-    
-    # Show a plot of the generated distribution
-    mainPanel(
-      plotOutput("bar_top3"),
-      tableOutput("table_full"),
-      textOutput("explain")
-    )
-  )
-)
-
-server <- function(input, output, session){
-  # 读入模型与工件（开局一次）
-  modeling <- readRDS("output/modeling.rds")
-  mdl <<- xgb.load("model_final.xgb")  # 放全局，避免重复加载
-
-  observeEvent(input$go, {
-    # === 1) 把用户答案 → 训练一致的“数值特征行” ===
-    # 这里演示：你需要按训练时的规则把factor→numeric；确保列名与 modeling$features 一致
-    df_user <- data.frame(
-      # 示例字段（请改成你真实的特征列；并与训练一致做编码/标准化）
-      region = input$region,
-      news   = input$news,
-      # ...
-      stringsAsFactors = TRUE
-    )
-
-    # 你训练时用的是 mutate_if(is.factor, as.numeric)，这里也做同样处理：
-    df_user_numeric <- dplyr::mutate_if(df_user, is.factor, as.numeric)
-
-    # === 2) 调用预测函数 ===
-    res <- predict_party(df_user_numeric, top_k = 3)
-    top3 <- res$topk[[1]]
-    probs <- res$probs[1,]
-
-    # === 3) 可视化 & 文案 ===
-    output$bar_top3 <- renderPlot({
-      barplot(top3$prob, names.arg = top3$party, ylim = c(0,1))
-    })
-
-    output$table_full <- renderTable({
-      data.frame(
-        party = modeling$class_levels,
-        prob  = round(probs, 3),
-        note  = ifelse(probs < 0.05, "low confidence (minor)", "")
-      )
-    }, striped = TRUE, bordered = TRUE)
-
-    output$explain <- renderText({
-      sprintf("People similar to you tend to vote %s (%.0f%%), then %s (%.0f%%).",
-              top3$party[1], 100*top3$prob[1],
-              top3$party[2], 100*top3$prob[2])
-    })
-  })
-}
-
-shinyApp(ui, server)
-
-```
-
-```{r}
-library(shiny)
-library(shinythemes)
-library(xgboost)
-
-choices_strong_disagree_to_agree <- c(
-  "Strongly disagree", 
-  "Somewhat disagree", 
-  "Neither agree nor disagree", 
-  "Somewhat agree", 
-  "Strongly agree", 
-  "Don't know / Prefer not to answer"
-)
-
-choices_yes_no_dk <- c(
-  "Yes", "No", "Don't know / Prefer not to answer"
-)
-
-choices_yes_some_no_dk <- c(
-  "Yes", "In some circumstances", "No", "Don't know / Prefer not to answer"
-)
-
-choices_fed_gov_sat <- c(
-  "Very satisfied", "Fairly satisfied", "Not very satisfied", "Not at all satisfied", "Don't know / Prefer not to answer"
-)
-
-choices_province <- c(
-  "Alberta","British Columbia","Manitoba","New Brunswick","Newfoundland and Labrador",
-  "Northwest Territories","Nova Scotia","Nunavut","Ontario","Prince Edward Island",
-  "Quebec","Saskatchewan","Yukon"
-)
-
-ui <- fluidPage(
-  theme = shinytheme("yeti"),
-  
-  navbarPage(
-    "VoteMatch",
-             
-    # Tab 1
-    tabPanel("Input",
-      sidebarLayout(
-        sidebarPanel(
-          h4("Project Description"),
-          p("This project analyzes CES (Canadian Election Study) data to build a predictive model and develop an interactive interactive dashboard. Please answer the questions honestly. 'Don't know' responses will be ignored for prediction purposes.")
-          ),
-        
-        mainPanel(
-          h3("Please answer the following questions:"),
-          
-          radioButtons("q1", "How satisfied are you with the performance of the federal government under Justin Trudeau?", choices = choices_fed_gov_sat),
-          selectInput("q2", "In which province or territory are you currently living?", choices = choices_province),
-          radioButtons("q3", "The government does not care much about what people like me think.", choices = choices_strong_disagree_to_agree),
-          
-          radioButtons("q4", "How much do you think should be done for racial minorities?", choices = c("Much more", "Somewhat more", "About the same as now", "Somewhat less", "Much less", "Don't know / Prefer not to answer")),
-          radioButtons("q5", "When there is a conflict between protecting the environment and creating jobs, jobs should come first.", choices = choices_strong_disagree_to_agree),
-          radioButtons("q6", "We have gone too far in pushing equal rights in this country.", choices = choices_strong_disagree_to_agree),
-          
-          radioButtons("q7", "This country would have many fewer problems if there was more emphasis on traditional family values.", choices = choices_strong_disagree_to_agree),
-          radioButtons("q8", "Too many recent immigrants just don't want to fit in to Canadian society.", choices = choices_strong_disagree_to_agree),
-                 
-          radioButtons("q9", "Is income inequality a big problem in Canada?", choices = c("Definitely yes","Probably yes","Not sure","Probably not","Definitely not","Don't know / Prefer not to answer")),
-          radioButtons("q10", "The government should leave it entirely to the private sector to create jobs.", choices = choices_strong_disagree_to_agree),
-          radioButtons("q11", "Should abortion be banned?", choices = choices_yes_some_no_dk),
-          radioButtons("q12", "We have gone too far in pushing bilingualism in Canada.", 
-                              choices = choices_strong_disagree_to_agree),
-          radioButtons("q13", "Newer lifestyles are contributing to the breakdown of our society.", 
-                              choices = choices_strong_disagree_to_agree),
-          radioButtons("q14", "Immigrants take jobs away from other Canadians.", 
-                              choices = choices_strong_disagree_to_agree),
-          radioButtons("q15", "Were you born in Canada?", 
-                              choices = choices_yes_no_dk),
-          radioButtons("q16", "Are you presently married, living with a partner, divorced, separated, widowed, or have you never been married?", choices = c("Married","Living with a  partner","Divorced","Separated","Widowed","Never Married","Don't know / Prefer not to answer")),
-                 
-          numericInput("q17", "Respondent age in years:", value = NA, min = 0),
-          actionButton("submit", "Submit")
-          )
-        ) # sidebarLayout
-      ) # tabPanel
-    ) # navbarPage
-  ) # fluidPage
-
-server <- function(input, output, session) {
-  output$results <- renderPrint({
-    input$submit
-    isolate({
-      list(
-          cps21_fed_gov_sat = input$q1,
-          pes21_province = input$q2,
-          pes21_govtcare = input$q3,
-          pes21_donerm = input$q4,
-          pes21_envirojob = input$q5,
-          pes21_equalrights = input$q6,
-          pes21_famvalues = input$q7,
-          pes21_fitin = input$q8,
-          pes21_inequal = input$q9,
-          pes21_privjobs = input$q10,
-          pes21_abort2 = input$q11,
-          pes21_bilingualism = input$q12,
-          pes21_newerlife = input$q13,
-          pes21_immigjobs = input$q14,
-          cps21_bornin_canada = input$q15,
-          cps21_marital = input$q16,
-          cps21_age = input$q17
-      )
-    })
-  })
-}
-
-
-shinyApp(ui, server)
-
-```
-
-```{r}
-library(shiny)
-library(xgboost)
-
-# 假设 artifacts 已经保存了模型
-artifacts <- readRDS("output/modeling.rds")
-
-# 16个问题的选项示例（根据你给的替换掉原来的1,2,3,4）
-question_options <- list(
-  q1 = c("Strongly agree", "Agree", "Neutral", "Disagree", "Strongly disagree"),
-  q2 = c("Option A", "Option B", "Option C"),
-  q3 = c("Yes", "No"),
-  q4 = c("Option 1", "Option 2", "Option 3"),
-  q5 = c("Yes", "No"),
-  q6 = c("Option 1", "Option 2", "Option 3"),
-  q7 = c("Option A", "Option B"),
-  q8 = c("Yes", "No"),
-  q9 = c("Strongly agree", "Agree", "Neutral", "Disagree", "Strongly disagree"),
-  q10 = c("Option A", "Option B"),
-  q11 = c("Yes", "No"),
-  q12 = c("Option 1", "Option 2"),
-  q13 = c("Yes", "No"),
-  q14 = c("Option A", "Option B"),
-  q15 = c("Yes", "No"),
-  q16 = c("Age range 18-29", "30-44", "45-59", "60+")
-)
-
-ui <- fluidPage(
-  titlePanel("Voter Preference Prediction"),
-
-  sidebarLayout(
-    sidebarPanel(
-      h4("Project description"),
-      p("This project predicts the likelihood of a voter supporting each Canadian political party based on their responses to 16 questions. Select your answers below and click Predict to see probabilities.")
-    ),
-
-    mainPanel(
-      # 生成16个下拉菜单
-      lapply(1:16, function(i) {
-        selectInput(
-          inputId = paste0("q", i),
-          label = paste("Question", i),
-          choices = question_options[[paste0("q", i)]]
-        )
-      }),
-      actionButton("goButton", "Predict"),
-      br(), br(),
-      tableOutput("pred")
-    )
-  )
-)
-
-server <- function(input, output, session) {
-
-  output$pred <- renderTable({
-    input$goButton  # 点击按钮触发
-
-    # 用 isolate 只在点击时获取输入
-    user_input <- isolate({
-      data.frame(
-        cps21_fed_gov_sat = input$q1,
-        pes21_province = input$q2,
-        pes21_govtcare = input$q3,
-        pes21_donerm = input$q4,
-        pes21_envirojob = input$q5,
-        pes21_equalrights = input$q6,
-        pes21_famvalues = input$q7,
-        pes21_fitin = input$q8,
-        pes21_inequal = input$q9,
-        pes21_privjobs = input$q10,
-        pes21_abort2 = input$q11,
-        pes21_bilingualism = input$q12,
-        pes21_newerlife = input$q13,
-        pes21_immigjobs = input$q14,
-        cps21_bornin_canada = input$q15,
-        cps21_age = input$q16,
-        stringsAsFactors = FALSE
-      )
-    })
-
-    # 如果模型训练时需要 factor -> numeric 编码，这里也要做
-    # user_input[] <- lapply(user_input, function(x) as.numeric(factor(x)))
-
-    # 构建 DMatrix
-    dmat <- xgb.DMatrix(data = as.matrix(user_input))
-
-    # 预测
-    pred_prob <- predict(artifacts$model, dmat)
-    pred_mat <- matrix(pred_prob, nrow=1, ncol=artifacts$n_class, byrow=TRUE)
-    colnames(pred_mat) <- artifacts$class_levels
-    pred_mat
-  }, rownames = TRUE)
-}
-
-shinyApp(ui, server)
-
-```
-
 #### 1
 
 ```{r}
@@ -343,12 +59,11 @@ choices_agree <- c(
   "Somewhat disagree", 
   "Neither agree nor disagree", 
   "Somewhat agree", 
-  "Strongly agree", 
-  "Don't know / Prefer not to answer"
+  "Strongly agree"
 )
 
 choices_yes_no <- c(
-  "Yes", "No", "Don't know / Prefer not to answer"
+  "Yes", "No"
 )
 
 choices_province <- c(
@@ -417,7 +132,7 @@ all_inputs <- c(list(age_input), input_list)
 ```
 
 ```{r}
-artifacts <- readRDS("output/modeling.rds")
+artifacts <- readRDS("output/modeling_2.rds")
 
 
 ui <- fluidPage(
@@ -441,7 +156,7 @@ ui <- fluidPage(
 
 server <- function(input, output) {
   # 加载模型（包含模型对象、特征名等）
-  artifacts <- readRDS("output/modeling.rds")
+  artifacts <- readRDS("output/modeling_2.rds")
   model <- artifacts$model
   features <- artifacts$features
   class_levels <- artifacts$class_levels
@@ -474,12 +189,35 @@ server <- function(input, output) {
       
       # 转为 data.frame，列名顺序要和模型一致
       df <- as.data.frame(input_values)[features]
+      levels_list <- artifacts$levels_list
       
+      for (col in names(levels_list)) {
+        if (col %in% names(df) && col != "cps21_age") {
+          df[[col]] <- factor(df[[col]], levels = levels_list[[col]])
+        }
+      }
+            str(df)
+      
+            # 只对非 age 的 factor 列进行 as.numeric
+
+      for (col in names(df)) {
+        if (col != "cps21_age" && is.factor(df[[col]])) {
+          df[[col]] <- as.numeric(df[[col]])
+        }
+      }
+      str(df)
+      
+      # 转为 matrix 输入 XGBoost
+      pred <- predict(model, as.matrix(df))
+      
+      print(df)  # 看看转为 data.frame 后的样子
+      print(as.matrix(df))  # 看看转换为 numeric 矩阵后是什么
+
       # 确保 factor 类型（如果需要，可以提前将选项值编码为数字）
       # 示例：df$pes21_equalrights <- factor(df$pes21_equalrights, levels = ...)
 
       # 做预测（softprob 输出每类的概率）
-      pred <- predict(model, as.matrix(df))
+      #pred <- predict(model, as.matrix(df))
       pred_mat <- matrix(pred, ncol = n_class, byrow = TRUE)
       
       # 排序后显示概率
@@ -506,31 +244,5 @@ shinyApp(ui, server)
 ```
 
 
-```{r}
-# 先加载 haven（处理 Stata label）
-library(haven)
 
-# feature 列表
-features <- artifacts$features
-
-# 循环查看每个变量
-for (feat in features) {
-  cat("====", feat, "====\n")
-  
-  # 判断是不是 labelled（CES 数据集很多都是 labelled）
-  if (is.labelled(ces2021[[feat]])) {
-    # 转成 factor 看 levels
-    print(levels(as_factor(ces2021[[feat]])))
-  } else if (is.factor(ces2021[[feat]])) {
-    print(levels(ces2021[[feat]]))
-  } else if (is.numeric(ces2021[[feat]])) {
-    # 数值型就看 summary
-    print(summary(ces2021[[feat]]))
-  } else {
-    # 其他类型直接用 unique
-    print(unique(ces2021[[feat]]))
-  }
-  cat("\n")
-}
-```
 
