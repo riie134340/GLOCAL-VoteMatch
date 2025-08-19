@@ -138,29 +138,43 @@ artifacts <- readRDS("output/modeling_2.rds")
 ui <- fluidPage(
   titlePanel("Voter Preference Prediction"),
   
-  sidebarLayout(
-    sidebarPanel(
-      h4("Project description"),
-      p("This project predicts the likelihood of a voter supporting each Canadian political party based on their responses to 16 questions. Select your answers below and click Predict to see probabilities.")
+  tabsetPanel(id = "mainTabs",
+    tabPanel("Form",
+      sidebarLayout(
+        sidebarPanel(
+          h4("Project description"),
+          p("This project predicts the likelihood of a voter supporting each Canadian political party based on their responses to 16 questions. Select your answers below and click Predict to see probabilities.")
+        ),
+        
+        mainPanel(
+          do.call(tagList, all_inputs),      # 所有输入项
+          actionButton("goButton", "Predict"),  # 点击后触发预测
+          #br(), br(),
+          #tableOutput("pred")               # 预测结果表格
+        )
+      )
     ),
     
-    mainPanel(
-      do.call(tagList, all_inputs),      # 所有输入项
-      actionButton("goButton", "Predict"),  # 点击后触发预测
-      br(), br(),
-      tableOutput("pred")               # 预测结果表格
+    tabPanel("Results",
+      h3("Prediction Results"),
+      tableOutput("pred")  # 显示结果
     )
   )
 )
 
 
-server <- function(input, output) {
+server <- function(input, output, session) {
   # 加载模型（包含模型对象、特征名等）
   artifacts <- readRDS("output/modeling_2.rds")
   model <- artifacts$model
   features <- artifacts$features
   class_levels <- artifacts$class_levels
   n_class <- artifacts$n_class
+  
+    
+  observeEvent(input$goButton, {
+    updateTabsetPanel(session, "mainTabs", selected = "Results")
+  })
   
   # 构造预测函数
   get_prediction <- reactive({
