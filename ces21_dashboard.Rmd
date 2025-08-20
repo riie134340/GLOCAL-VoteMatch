@@ -132,6 +132,7 @@ all_inputs <- c(list(age_input), input_list)
 ```
 
 ```{r}
+library(ggplot2)
 artifacts <- readRDS("output/modeling_2.rds")
 
 
@@ -156,9 +157,17 @@ ui <- fluidPage(
     ),
     
     tabPanel("Results",
+      
+      sidebarLayout(
+        sidebarPanel(
       h3("Prediction Results"),
-      tableOutput("pred")  # 显示结果
+      tableOutput("pred"),  # 显示结果
+        ),
+        
+        mainPanel(
+      plotOutput("predPlot", height = "400px")
     )
+    ))
   )
 )
 
@@ -177,9 +186,7 @@ server <- function(input, output, session) {
   })
   
   # 构造预测函数
-  get_prediction <- reactive({
-    # 用 isolate 避免每个输入变动都立刻触发
-    isolate({
+  get_prediction <- eventReactive(input$goButton, {
       # 收集输入数据
       input_values <- list(
         cps21_age             = input$q1,
@@ -210,25 +217,15 @@ server <- function(input, output, session) {
           df[[col]] <- factor(df[[col]], levels = levels_list[[col]])
         }
       }
-            str(df)
-      
-            # 只对非 age 的 factor 列进行 as.numeric
-
       for (col in names(df)) {
         if (col != "cps21_age" && is.factor(df[[col]])) {
           df[[col]] <- as.numeric(df[[col]])
         }
       }
-      str(df)
+      #str(df)
       
       # 转为 matrix 输入 XGBoost
       pred <- predict(model, as.matrix(df))
-      
-      print(df)  # 看看转为 data.frame 后的样子
-      print(as.matrix(df))  # 看看转换为 numeric 矩阵后是什么
-
-      # 确保 factor 类型（如果需要，可以提前将选项值编码为数字）
-      # 示例：df$pes21_equalrights <- factor(df$pes21_equalrights, levels = ...)
 
       # 做预测（softprob 输出每类的概率）
       #pred <- predict(model, as.matrix(df))
@@ -242,17 +239,39 @@ server <- function(input, output, session) {
       pred_df <- pred_df[order(-pred_df$Probability), ]
       
       return(pred_df)
-    })
+
   })
 
   # 输出预测表格
   output$pred <- renderTable({
-    req(input$goButton)
-    isolate({
-      get_prediction()
-    })
+    get_prediction()
   })
+  
+output$predPlot <- renderPlot({
+  req(get_prediction())
+  pred_df <- get_prediction()
+
+  # 排序以便从高到低显示
+  pred_df$Party <- factor(pred_df$Party, levels = pred_df$Party[order(pred_df$Probability)])
+
+  ggplot(pred_df, aes(x = Party, y = Probability)) +
+    geom_col(fill = "#4DAF4A", width = 0.6) +
+    geom_text(aes(label = scales::percent(Probability, accuracy = 0.1)), 
+              vjust = -0.5, size = 4) +
+    ylim(0, 1) +
+    labs(title = "Predicted Support Probability by Party",
+         y = "Probability",
+         x = "Party") +
+    theme_minimal(base_size = 14) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title = element_text(face = "bold", hjust = 0.5)
+    )
+})
+
 }
+  
+ 
 
 shinyApp(ui, server)
 ```
