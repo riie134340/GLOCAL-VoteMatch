@@ -6,6 +6,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
+#rm(list = ls())
 knitr::opts_chunk$set(
   cache = TRUE,         
   autodep = TRUE,       
@@ -19,7 +20,6 @@ We loaded the pre-processed data saved from the previous step.
 The initial dataset contained a total of 15,484 rows, with several variables related to voters' characteristics and political opinions.
 
 ```{r load-libs, message=FALSE}
-#rm(list = ls())
 library(dplyr)
 library(xgboost)
 library(caret)
@@ -516,7 +516,8 @@ final_model <- list(
   levels_list  = levels_list
 )
 
-saveRDS(final_model, "output/modeling_2.rds")
+# saveRDS(final_model, "output/modeling_2.rds")
+saveRDS(final_model, "output/modeling.rds")
 ```
 
 
@@ -528,3 +529,5 @@ importance_matrix <- xgb.importance(
 print(importance_matrix)
 xgb.plot.importance(importance_matrix[1:20,])
 ```
+
+

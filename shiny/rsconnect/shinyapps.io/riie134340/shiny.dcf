@@ -1,0 +1,10 @@
+name: shiny
+title:
+username: riie134340
+account: riie134340
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 15237150
+bundleId: 10797721
+url: https://riie134340.shinyapps.io/shiny/
+version: 1

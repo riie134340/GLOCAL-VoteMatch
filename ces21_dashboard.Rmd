@@ -54,6 +54,7 @@ library(shiny)
 library(shinythemes)
 library(xgboost)
 library(ggplot2)
+library(shinydashboard)
 
 choices_agree <- c(
   "Strongly disagree", 
@@ -127,7 +128,6 @@ input_list <- lapply(seq_along(question_texts), function(i) {
   )
 })
 
-# 合并所有控件为一个 tagList（用于 UI 显示）
 all_inputs <- c(list(age_input), input_list)
 
 ```
@@ -277,12 +277,9 @@ shinyApp(ui, server)
 #### Version 2
 
 ```{r}
-library(shiny)
-library(shinydashboard)
-library(ggplot2)
 
 ui <- dashboardPage(
-  dashboardHeader(title = "Voter Preference Prediction"),
+  dashboardHeader(title = "VoterMatch"),
   
   dashboardSidebar(
     sidebarMenu( id = "sidebarMenuID",
@@ -308,9 +305,12 @@ ui <- dashboardPage(
       ),
       
       tabItem(tabName = "results",
+              h3("Your Personalized Voting Prediction"),
+              p("Based on your responses, the model has estimated how likely you are to support each major Canadian political party."),
+              p("These probabilities reflect how voters with similar characteristics to yours have voted in past federal elections."),
               fluidRow(
-                valueBoxOutput("predictedParty", width = 6),   # ✅ 新增摘要框
-                valueBoxOutput("probability", width = 6)       # ✅ 新增摘要框
+                valueBoxOutput("predictedParty", width = 6),
+                valueBoxOutput("probability", width = 6)
               ),
               fluidRow(
                 box(title = "Prediction Table", width = 6, tableOutput("pred")),
@@ -322,15 +322,15 @@ ui <- dashboardPage(
 )
 
 server <- function(input, output, session) {
-  # 加载模型（包含模型对象、特征名等）
-  artifacts <- readRDS("output/modeling_2.rds")
+  # load model
+  artifacts <- readRDS("output/modeling.rds")
   model <- artifacts$model
   features <- artifacts$features
   class_levels <- artifacts$class_levels
   n_class <- artifacts$n_class
   
   observeEvent(input$goButton, {
-    updateTabItems(session, "sidebarMenuID", "results")  # ✅ 正确的函数
+    updateTabItems(session, "sidebarMenuID", "results")
   })
 
   get_prediction <- eventReactive(input$goButton, {
@@ -356,7 +356,7 @@ server <- function(input, output, session) {
         pes21_envirojob       = input$q17
         )
     
-    # 转为 data.frame，列名顺序要和模型一致
+    # convert to data.frame
     df <- as.data.frame(input_values)[features]
     levels_list <- artifacts$levels_list
       
@@ -365,12 +365,15 @@ server <- function(input, output, session) {
         df[[col]] <- factor(df[[col]], levels = levels_list[[col]])
       }
     }
+    
+    # convert to num
     for (col in names(df)) {
       if (col != "cps21_age" && is.factor(df[[col]])) {
         df[[col]] <- as.numeric(df[[col]])
       }
     }
     
+    # prediction
     pred <- predict(model, as.matrix(df))
     pred_mat <- matrix(pred, ncol = n_class, byrow = TRUE)
 
@@ -383,7 +386,7 @@ server <- function(input, output, session) {
     return(pred_df)
   })
 
-  # ✅ 结果输出
+  # output result
   output$pred <- renderTable({
     get_prediction()
   })
