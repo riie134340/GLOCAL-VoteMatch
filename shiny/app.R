@@ -33,19 +33,19 @@ age_input <- sliderInput(
 
 question_texts <- c(
   "Were you born in Canada?",
-  "In which province or territory are you currently living?",
-  "Are you presently married, living with a partner, divorced, separated, widowed, or have you never been married?",
-  "The government does not care much about what people like me think.",
-  "How satisfied are you with the performance of the federal government under Justin Trudeau?",
-  "We have gone too far in pushing equal rights in this country.",
-  "How much do you think should be done for racial minorities?",
-  "Should abortion be banned?",
+  "In which province or territory are you currently reside?",
+  "What is your current marital status?",
+  "Do you think the government does not care much about what people like me think?",
+  "How satisfied are you with the performance of the federal government led by Justin Trudeau?",
+  "Do you think this country has gone too far in promoting equal rights?",
+  "How much do you think the government should do to support racial minorities?",
+  "Do you think abortion should be banned?",
   "This country would have many fewer problems if there was more emphasis on traditional family values.",
-  "We have gone too far in pushing bilingualism in Canada.",
+  "Canada has gone too far in promoting bilingualism.",
   "Newer lifestyles are contributing to the breakdown of our society.",
-  "Too many recent immigrants just don't want to fit in to Canadian society.",
+  "Too many recent immigrants are not trying to integrate into Canadian society.",
   "Immigrants take jobs away from other Canadians.",
-  "Is income inequality a big problem in Canada?",
+  "Do you think income inequality is a serious problem in Canada?",
   "The government should leave it entirely to the private sector to create jobs.",
   "When there is a conflict between protecting the environment and creating jobs, jobs should come first."
 )
@@ -64,7 +64,7 @@ choices_list <- list(
   choices_agree,
   choices_agree,
   choices_agree,
-  c("Definitely yes", "Probably yes", "Not sure", "Probably not", "Definitely not"),
+  choices_agree,
   choices_agree,
   choices_agree
 )
@@ -95,13 +95,16 @@ ui <- dashboardPage(
               fluidRow(
                 box(
                   title = "Project Description", width = 12, status = "info", solidHeader = TRUE,
-                  p("This project predicts the likelihood of a voter supporting each Canadian political party based on their responses to 16 questions. Select your answers below and click Predict to see probabilities.")
+                  p("This project estimates how closely your views align with each Canadian political party based on your responses to 16 questions. Select your answers below and click Predict to see your alignment result.")
                 ),
                 box(
                   title = "Input", width = 12, status = "primary", solidHeader = TRUE,
                   do.call(tagList, all_inputs),
-                  actionButton("goButton", "Predict")
-                )
+                  br(),
+                  br(),
+                  actionButton("goButton", "Predict"),
+                  br()
+                ),
               )
       ),
       
@@ -214,3 +217,7 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
+
+
+#setwd("C:/Users/rshi1/Documents/Work/GLOCAL/GLOCAL_project/CES2021/shiny")
+#rsconnect::deployApp(".")
