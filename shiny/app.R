@@ -79,6 +79,13 @@ input_list <- lapply(seq_along(question_texts), function(i) {
 
 all_inputs <- c(list(age_input), input_list)
 
+party_meta <- data.frame(
+  Party = c("Liberal Party", "Conservative Party", "NDP", "Green Party", "Bloc Québécois", "People's Party"),
+  color = c("#D71920", "#0C499C", "#F37021", "#3D9B35", "#00AEEF", "#5B2C83"),
+  logo  = c("liberal.png", "conservative.png", "ndp.png", "green.png", "bloc.png", "ppc.png"),
+  stringsAsFactors = FALSE
+)
+
 ui <- dashboardPage(
   dashboardHeader(title = "VoterMatch"),
   
@@ -95,7 +102,8 @@ ui <- dashboardPage(
               fluidRow(
                 box(
                   title = "Project Description", width = 12, status = "info", solidHeader = TRUE,
-                  p("This project estimates how closely your views align with each Canadian political party based on your responses to 16 questions. Select your answers below and click Predict to see your alignment result.")
+                  p("This project estimates how closely your views align with each Canadian political party based on your responses to 16 questions."),
+                  p("Select your answers below and click Predict to see your alignment result.")
                 ),
                 box(
                   title = "Input", width = 12, status = "primary", solidHeader = TRUE,
@@ -112,9 +120,18 @@ ui <- dashboardPage(
               h3("Your Personalized Voting Prediction"),
               p("Based on your responses, the model has estimated how likely you are to support each major Canadian political party."),
               p("These probabilities reflect how voters with similar characteristics to yours have voted in past federal elections."),
+              
               fluidRow(
-                valueBoxOutput("predictedParty", width = 6),
-                valueBoxOutput("probability", width = 6)
+                box(
+                  title = "Prediction Result", width = 12, status = "info", solidHeader = TRUE,
+                  uiOutput("summaryText")
+                )
+              ),
+              
+              fluidRow(
+                  valueBoxOutput("predictedParty", width = 6),
+                  valueBoxOutput("probability", width = 6)
+                
               ),
               fluidRow(
                 box(title = "Prediction Table", width = 6, tableOutput("pred")),
@@ -214,6 +231,38 @@ server <- function(input, output, session) {
         plot.title = element_text(face = "bold", hjust = 0.5)
       )
   })
+  
+  output$summaryText <- renderUI({
+    req(get_prediction())
+    df <- get_prediction()
+    top1 <- df[1, ]
+    top2 <- if (nrow(df) >= 2) df[2, ] else NULL
+    
+    # 第一行：Top1
+    line1 <- tags$p(
+      "The model suggests your strongest alignment is with the ",
+      tags$strong(top1$Party),
+      " (", scales::percent(top1$Probability, accuracy = 0.1), ").",
+      style = "font-size:16px; line-height:1.6;"
+    )
+    
+    # 第二行：Top2 + 其他
+    if (!is.null(top2)) {
+      line2 <- tags$p(
+        "A secondary match is the ",
+        tags$strong(top2$Party),
+        " (", scales::percent(top2$Probability, accuracy = 0.1), "), ",
+        "while support for other parties is lower.",
+        style = "font-size:16px; line-height:1.6;"
+      )
+    } else {
+      line2 <- NULL
+    }
+    
+    tags$div(line1, line2)
+  })
+  
+  
 }
 
 shinyApp(ui, server)
